@@ -57,7 +57,7 @@ const coolantDatabase = [
 ];
 
 // Kalkulator zużycia chemii
-function ChemicalConsumptionCalculator({ products }) {
+const ChemicalConsumptionCalculator = ({ products }) => {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [area, setArea] = useState('');
   const [price, setPrice] = useState('');
@@ -152,10 +152,10 @@ function ChemicalConsumptionCalculator({ products }) {
       )}
     </div>
   );
-}
+};
 
 // Kalkulator objętości dla eska®strip H 365A
-function VolumeCalculator() {
+const VolumeCalculator = () => {
   const [tankVolume, setTankVolume] = useState('');
   const [result, setResult] = useState(null);
   
@@ -225,10 +225,10 @@ function VolumeCalculator() {
       )}
     </div>
   );
-}
+};
 
 // Kalkulator uzupełniania stężenia chemii
-function ConcentrationCalculator({ products }) {
+const ConcentrationCalculator = ({ products }) => {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [currentConcentration, setCurrentConcentration] = useState('');
   const [targetConcentration, setTargetConcentration] = useState('');
@@ -346,10 +346,10 @@ function ConcentrationCalculator({ products }) {
       )}
     </div>
   );
-}
+};
 
 // Selektor chłodziw
-function CoolantSelector() {
+const CoolantSelector = () => {
   const [waterHardness, setWaterHardness] = useState('');
   const [selectedMaterials, setSelectedMaterials] = useState([]);
   const [selectedOperations, setSelectedOperations] = useState([]);
@@ -564,10 +564,10 @@ function CoolantSelector() {
       )}
     </div>
   );
-}
+};
 
 // Panel handlowca
-function SalesRepPanel({ currentUser, products }) {
+const SalesRepPanel = ({ currentUser, fetchProducts, products }) => {
   const [clients, setClients] = useState([]);
   const [filteredClients, setFilteredClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
@@ -601,7 +601,7 @@ function SalesRepPanel({ currentUser, products }) {
       console.error("Błąd podczas pobierania klientów:", error);
     }
   };
-          
+        
   // Pobierz raporty dla wybranego klienta
   const fetchReports = async (clientId) => {
     try {
@@ -653,7 +653,7 @@ function SalesRepPanel({ currentUser, products }) {
     if (newClientName.trim() === '') return;
     
     try {
-      await addDoc(collection(db, "clients"), {
+      const docRef = await addDoc(collection(db, "clients"), {
         name: newClientName,
         salesRepId: currentUser.id,
         createdAt: new Date().toISOString()
@@ -948,10 +948,10 @@ function SalesRepPanel({ currentUser, products }) {
       )}
     </div>
   );
-}
+};
 
 // Zarządzanie użytkownikami (Admin Panel)
-function UserManagement() {
+const UserManagement = () => {
   const [users, setUsers] = useState([]);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showEditUserModal, setShowEditUserModal] = useState(false);
@@ -1250,10 +1250,10 @@ function UserManagement() {
       )}
     </div>
   );
-}
+};
 
 // Zarządzanie produktami
-function ProductManagement({ fetchProducts, products }) {
+const ProductManagement = ({ fetchProducts, products }) => {
   const [newProduct, setNewProduct] = useState({ name: '', consumption: 0 });
   const [editingProduct, setEditingProduct] = useState(null);
   
@@ -1427,10 +1427,10 @@ function ProductManagement({ fetchProducts, products }) {
       </div>
     </div>
   );
-}
+};
 
 // Zarządzanie wszystkimi klientami (Admin)
-function ClientManagement() {
+const ClientManagement = () => {
   const [clients, setClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
   const [reports, setReports] = useState([]);
@@ -1646,10 +1646,10 @@ function ClientManagement() {
       </div>
     </div>
   );
-}
+};
 
 // Panel administratora
-function AdminPanel({ fetchProducts, products }) {
+const AdminPanel = ({ fetchProducts, products }) => {
   const [activeSection, setActiveSection] = useState('users');
   
   return (
@@ -1686,7 +1686,7 @@ function AdminPanel({ fetchProducts, products }) {
       </div>
     </div>
   );
-}
+};
 
 // Główny komponent aplikacji
 function App() {
@@ -1873,8 +1873,8 @@ function App() {
     <div className="app-container">
       <div className="header">
         <div className="header-title">
-          <img src="https://i.ibb.co/fzSKvntL/Projekt-bez-nazwy-16.png" alt="Logo" className="logo" />
-          <h1>Haug Chemie® Polska HelpDesk</h1>
+          <img src="/api/placeholder/48/48" alt="Logo" className="logo" />
+          <h1>Chemical Consumption Calculator for Haug</h1>
         </div>
         
         <div className="user-section">
@@ -1948,10 +1948,17 @@ function App() {
         {activeTab === 'concentrationCalculator' && <ConcentrationCalculator products={products} />}
         {activeTab === 'coolantSelector' && <CoolantSelector />}
         {activeTab === 'salesRepPanel' && currentUser && currentUser.role === 'salesRep' && 
-          <SalesRepPanel currentUser={currentUser} products={products} />
+          <SalesRepPanel 
+            currentUser={currentUser} 
+            fetchProducts={fetchProducts} 
+            products={products} 
+          />
         }
         {activeTab === 'adminPanel' && currentUser && currentUser.role === 'admin' && 
-          <AdminPanel fetchProducts={fetchProducts} products={products} />
+          <AdminPanel 
+            fetchProducts={fetchProducts} 
+            products={products} 
+          />
         }
       </div>
       
@@ -2004,12 +2011,21 @@ function App() {
                 </button>
               </div>
             </div>
+            
+            <div className="login-help">
+              <p>Dane logowania użytkowników:</p>
+              <p>Admin: admin@haug.com / admin123</p>
+              <p>Pawel: pawel@haug.com / pawel123</p>
+              <p>Mateusz: mateusz@haug.com / mateusz123</p>
+              <p>Mariusz: mariusz@haug.com / mariusz123</p>
+              <p>Tomek: tomek@haug.com / tomek123</p>
+            </div>
           </div>
         </div>
       )}
       
       <footer className="footer">
-        <p>© 2025 Haug Chemie®Polska - Wszelkie prawa zastrzeżone.</p>
+        <p>© 2025 Chemical Consumption Calculator for Haug. Wszelkie prawa zastrzeżone.</p>
       </footer>
     </div>
   );
