@@ -3,4 +3,9 @@
   publish = "build"
 
 [build.environment]
-  CI = "false"
+  NODE_VERSION = "16"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

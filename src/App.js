@@ -56,6 +56,88 @@ const coolantDatabase = [
   // Tutaj można dodać więcej chłodziw
 ];
 
+// Ekran logowania
+function LoginScreen({ onLogin }) {
+  const [credentials, setCredentials] = useState({ email: '', password: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setError('');
+    setLoading(true);
+    
+    if (!credentials.email || !credentials.password) {
+      setError('Wprowadź email i hasło');
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      await signInWithEmailAndPassword(auth, credentials.email, credentials.password);
+      // Obsługa logowania przekazana jest do funkcji zwrotnej onAuthStateChanged w komponencie App
+      setLoading(false);
+    } catch (error) {
+      console.error('Błąd logowania:', error);
+      setError('Nieprawidłowy email lub hasło');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="login-container">
+      <div className="login-box">
+        <div className="login-header">
+          <h1>Haug Chemie®Polska HelpDesk</h1>
+          <img src="https://i.ibb.co/fYhLC13J/Projekt-bez-nazwy-16.png00" alt="Logo" className="login-logo" />
+        </div>
+        
+        <div className="login-form">
+          <h2>Logowanie</h2>
+          
+          {error && (
+            <div className="error-message">
+              {error}
+            </div>
+          )}
+          
+          <div className="form-group">
+            <label>Email</label>
+            <input
+              type="email"
+              className="input-field"
+              value={credentials.email}
+              onChange={(e) => setCredentials({...credentials, email: e.target.value})}
+              placeholder="Podaj adres email"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label>Hasło</label>
+            <input
+              type="password"
+              className="input-field"
+              value={credentials.password}
+              onChange={(e) => setCredentials({...credentials, password: e.target.value})}
+              placeholder="Podaj hasło"
+              onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+            />
+          </div>
+          
+          <button
+            className="btn btn-primary btn-login"
+            onClick={handleLogin}
+            disabled={loading}
+          >
+            {loading ? 'Logowanie...' : 'Zaloguj się'}
+          </button>
+          
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Kalkulator zużycia chemii
 function ChemicalConsumptionCalculator({ products }) {
   const [selectedProduct, setSelectedProduct] = useState('');
@@ -1692,9 +1774,7 @@ function AdminPanel({ fetchProducts, products }) {
 function App() {
   const [activeTab, setActiveTab] = useState('chemicalConsumption');
   const [currentUser, setCurrentUser] = useState(null);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [loginCredentials, setLoginCredentials] = useState({ email: '', password: '' });
-  const [loginError, setLoginError] = useState('');
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [products, setProducts] = useState([
     { id: "1", name: "eska®clean 1001", consumption: 180 },
     { id: "2", name: "eska®clean 2250", consumption: 150 },
@@ -1772,27 +1852,6 @@ function App() {
       console.error("Błąd inicjalizacji bazy danych:", error);
     }
   };
-
-  // Funkcja logowania
-  const handleLogin = async () => {
-    setLoginError('');
-    
-    if (!loginCredentials.email || !loginCredentials.password) {
-      setLoginError('Wprowadź email i hasło');
-      return;
-    }
-    
-    try {
-      await signInWithEmailAndPassword(auth, loginCredentials.email, loginCredentials.password);
-      
-      setLoginModalOpen(false);
-      setLoginCredentials({ email: '', password: '' });
-      
-    } catch (error) {
-      console.error('Błąd logowania:', error);
-      setLoginError('Nieprawidłowy email lub hasło');
-    }
-  };
   
   // Funkcja wylogowania
   const handleLogout = async () => {
@@ -1825,6 +1884,8 @@ function App() {
 
   // Effect do inicjalizacji danych i obsługi autoryzacji
   useEffect(() => {
+    setIsAuthLoading(true);
+    
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
       if (authUser) {
         try {
@@ -1860,6 +1921,8 @@ function App() {
         setCurrentUser(null);
         localStorage.removeItem('currentUser');
       }
+      
+      setIsAuthLoading(false);
     });
     
     initializeFirebaseData();
@@ -1868,34 +1931,40 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Renderowanie głównego interfejsu
+  // Renderowanie podczas ładowania
+  if (isAuthLoading) {
+    return (
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p>Ładowanie aplikacji...</p>
+      </div>
+    );
+  }
+
+  // Jeśli użytkownik nie jest zalogowany, pokaż ekran logowania
+  if (!currentUser) {
+    return <LoginScreen />;
+  }
+
+  // Renderowanie głównego interfejsu dla zalogowanego użytkownika
   return (
     <div className="app-container">
       <div className="header">
         <div className="header-title">
-          <img src="https://i.ibb.co/fzSKvntL/Projekt-bez-nazwy-16.png" alt="Logo" className="logo" />
-          <h1>Haug Chemie® Polska HelpDesk</h1>
+          <img src="https://i.ibb.co/fYxC8dh8/Projekt-bez-nazwy-17.png" alt="Logo" className="logo" />
+          <h1>Haug Chemie®Polska HelpDesk</h1>
         </div>
         
         <div className="user-section">
-          {currentUser ? (
-            <div className="user-info">
-              <span>Zalogowany jako: <strong>{currentUser.username}</strong> ({currentUser.role === 'admin' ? 'Administrator' : 'Handlowiec'})</span>
-              <button
-                className="btn btn-secondary"
-                onClick={handleLogout}
-              >
-                Wyloguj
-              </button>
-            </div>
-          ) : (
+          <div className="user-info">
+            <span>Zalogowany jako: <strong>{currentUser.username}</strong> ({currentUser.role === 'admin' ? 'Administrator' : 'Handlowiec'})</span>
             <button
-              className="btn btn-primary"
-              onClick={() => setLoginModalOpen(true)}
+              className="btn btn-secondary"
+              onClick={handleLogout}
             >
-              Zaloguj się
+              Wyloguj
             </button>
-          )}
+          </div>
         </div>
       </div>
       
@@ -1924,7 +1993,7 @@ function App() {
         >
           Dobór chłodziw
         </div>
-        {currentUser && currentUser.role === 'salesRep' && (
+        {currentUser.role === 'salesRep' && (
           <div 
             className={`nav-tab ${activeTab === 'salesRepPanel' ? 'active' : ''}`}
             onClick={() => setActiveTab('salesRepPanel')}
@@ -1932,7 +2001,7 @@ function App() {
             Panel handlowca
           </div>
         )}
-        {currentUser && currentUser.role === 'admin' && (
+        {currentUser.role === 'admin' && (
           <div 
             className={`nav-tab ${activeTab === 'adminPanel' ? 'active' : ''}`}
             onClick={() => setActiveTab('adminPanel')}
@@ -1947,69 +2016,16 @@ function App() {
         {activeTab === 'volumeCalculator' && <VolumeCalculator />}
         {activeTab === 'concentrationCalculator' && <ConcentrationCalculator products={products} />}
         {activeTab === 'coolantSelector' && <CoolantSelector />}
-        {activeTab === 'salesRepPanel' && currentUser && currentUser.role === 'salesRep' && 
+        {activeTab === 'salesRepPanel' && currentUser.role === 'salesRep' && 
           <SalesRepPanel currentUser={currentUser} products={products} />
         }
-        {activeTab === 'adminPanel' && currentUser && currentUser.role === 'admin' && 
+        {activeTab === 'adminPanel' && currentUser.role === 'admin' && 
           <AdminPanel fetchProducts={fetchProducts} products={products} />
         }
       </div>
       
-      {loginModalOpen && (
-        <div className="modal">
-          <div className="modal-content">
-            <h2 className="modal-title">Logowanie</h2>
-            
-            {loginError && (
-              <div className="error-message">
-                {loginError}
-              </div>
-            )}
-            
-            <div className="modal-form">
-              <div className="form-row">
-                <label>Email</label>
-                <input
-                  type="email"
-                  className="input-field"
-                  value={loginCredentials.email}
-                  onChange={(e) => setLoginCredentials({...loginCredentials, email: e.target.value})}
-                  placeholder="Podaj adres email"
-                />
-              </div>
-              
-              <div className="form-row">
-                <label>Hasło</label>
-                <input
-                  type="password"
-                  className="input-field"
-                  value={loginCredentials.password}
-                  onChange={(e) => setLoginCredentials({...loginCredentials, password: e.target.value})}
-                  placeholder="Podaj hasło"
-                />
-              </div>
-              
-              <div className="modal-actions">
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setLoginModalOpen(false)}
-                >
-                  Anuluj
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleLogin}
-                >
-                  Zaloguj
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      
       <footer className="footer">
-        <p>© 2025 Haug Chemie®Polska - Wszelkie prawa zastrzeżone.</p>
+        <p>© 2025 Haug Chemie®Polska Prawa zastrzeżone.</p>
       </footer>
     </div>
   );
