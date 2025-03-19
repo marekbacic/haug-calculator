@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db, auth } from './firebase/config';
 import { 
   collection, 
@@ -10,8 +10,7 @@ import {
   query, 
   where,
   setDoc,
-  getDoc,
-  orderBy
+  getDoc
 } from 'firebase/firestore';
 import { 
   signInWithEmailAndPassword, 
@@ -20,10 +19,6 @@ import {
   onAuthStateChanged 
 } from 'firebase/auth';
 import './index.css';
-// Corrected jsPDF imports
-import { jsPDF } from 'jspdf';
-// Explicitly import autoTable plugin
-import autoTable from 'jspdf-autotable';
 
 // Pełna baza danych chłodziw na podstawie tabeli
 const coolantDatabase = [
@@ -308,177 +303,6 @@ const coolantDatabase = [
   }
 ];
 
-// Pomocnicza funkcja do formatowania daty
-const formatDate = (dateString) => {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  return date.toLocaleDateString('pl-PL', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
-};
-
-// Generowanie raportu PDF dla całego klienta
-function generateClientReport(client, reports, notes) {
-  // Tworzenie instancji jsPDF
-  const doc = new jsPDF();
-  
-  // Tytuł
-  doc.setFontSize(18);
-  doc.text(`Raport dla klienta: ${client.name}`, 14, 20);
-  
-  doc.setFontSize(12);
-  doc.text(`Data wygenerowania: ${new Date().toLocaleString('pl-PL')}`, 14, 30);
-  
-  // Historia raportów
-  doc.setFontSize(14);
-  doc.text('Historia raportów', 14, 45);
-  
-  let yPos = 55;
-  
-  if (!reports || reports.length === 0) {
-    doc.setFontSize(12);
-    doc.text('Brak historii raportów', 14, yPos);
-    yPos += 10;
-  } else {
-    reports.forEach((report, index) => {
-      // Sprawdź, czy potrzebna nowa strona
-      if (yPos > 270) {
-        doc.addPage();
-        yPos = 20;
-      }
-      
-      doc.setFontSize(12);
-      doc.text(`Raport z dnia ${formatDate(report.date)}`, 14, yPos);
-      yPos += 10;
-      
-      // Tabela danych dla stref
-      if (report.zones && report.zones.length > 0) {
-        // Przygotuj dane do tabeli
-        const tableData = report.zones.map((zone, idx) => [
-          `Strefa ${idx + 1}`,
-          zone.product || '-',
-          zone.concentration || '-',
-          zone.conductivity || '-',
-          zone.temperature || '-',
-          zone.ph || '-'
-        ]);
-        
-        // Use autoTable directly
-        autoTable(doc, {
-          startY: yPos,
-          head: [['Strefa', 'Produkt', 'Stężenie (%)', 'Przewodność', 'Temp. (°C)', 'pH']],
-          body: tableData,
-          theme: 'striped',
-          headStyles: { fillColor: [66, 133, 244] },
-          margin: { top: 10 }
-        });
-        
-        // Zapisz nową pozycję Y po tabeli
-        yPos = doc.lastAutoTable.finalY + 15;
-      }
-    });
-  }
-  
-  // Notatki
-  doc.addPage();
-  yPos = 20;
-  
-  doc.setFontSize(14);
-  doc.text('Notatki', 14, yPos);
-  yPos += 10;
-  
-  if (!notes || notes.length === 0) {
-    doc.setFontSize(12);
-    doc.text('Brak notatek', 14, yPos);
-  } else {
-    notes.forEach((note, index) => {
-      // Sprawdź, czy potrzebna nowa strona
-      if (yPos > 250) {
-        doc.addPage();
-        yPos = 20;
-      }
-      
-      doc.setFontSize(11);
-      doc.text(`Data: ${formatDate(note.createdAt)}`, 14, yPos);
-      yPos += 6;
-      
-      if (note.updatedAt) {
-        doc.text(`Edytowano: ${formatDate(note.updatedAt)}`, 14, yPos);
-        yPos += 6;
-      }
-      
-      doc.setFontSize(10);
-      
-      // Dzielimy tekst notatki na linie pasujące do szerokości strony
-      const splitText = doc.splitTextToSize(note.content, 180);
-      doc.text(splitText, 14, yPos);
-      
-      yPos += (splitText.length * 5) + 15;
-      
-      // Dodaj linię oddzielającą notatki
-      if (index < notes.length - 1) {
-        doc.setDrawColor(200, 200, 200);
-        doc.line(14, yPos - 7, 196, yPos - 7);
-      }
-    });
-  }
-  
-  // Stopka
-  doc.setFontSize(8);
-  const totalPages = doc.internal.getNumberOfPages();
-  
-  for (let i = 1; i <= totalPages; i++) {
-    doc.setPage(i);
-    doc.text(`Haug Chemie®Polska HelpDesk - Strona ${i} z ${totalPages}`, 14, 290);
-  }
-  
-  return doc;
-}
-
-// Generowanie pojedynczego raportu PDF
-function generateSingleReportPDF(client, report) {
-  const doc = new jsPDF();
-  
-  // Tytuł
-  doc.setFontSize(18);
-  doc.text(`Raport dla: ${client.name}`, 14, 20);
-  
-  doc.setFontSize(14);
-  doc.text(`Data raportu: ${new Date(report.date).toLocaleDateString('pl-PL')}`, 14, 30);
-  doc.text(`Data wygenerowania: ${new Date().toLocaleDateString('pl-PL')}`, 14, 40);
-  
-  // Tabela danych dla stref
-  if (report.zones && report.zones.length > 0) {
-    // Przygotuj dane do tabeli
-    const tableData = report.zones.map((zone, idx) => [
-      `Strefa ${idx + 1}`,
-      zone.product || '-',
-      zone.concentration || '-',
-      zone.conductivity || '-',
-      zone.temperature || '-',
-      zone.ph || '-'
-    ]);
-    
-    // Use autoTable directly
-    autoTable(doc, {
-      startY: 50,
-      head: [['Strefa', 'Produkt', 'Stężenie (%)', 'Przewodność', 'Temp. (°C)', 'pH']],
-      body: tableData,
-      theme: 'striped',
-      headStyles: { fillColor: [66, 133, 244] },
-      margin: { top: 10 }
-    });
-  }
-  
-  // Stopka
-  doc.setFontSize(8);
-  doc.text(`Haug Chemie®Polska HelpDesk - Raport z dnia ${new Date(report.date).toLocaleDateString('pl-PL')}`, 14, 290);
-  
-  return doc;
-}
-
 // Ekran logowania
 function LoginScreen({ onLogin }) {
   const [credentials, setCredentials] = useState({ email: '', password: '' });
@@ -554,6 +378,7 @@ function LoginScreen({ onLogin }) {
             {loading ? 'Logowanie...' : 'Zaloguj się'}
           </button>
           
+
         </div>
       </div>
     </div>
@@ -852,241 +677,11 @@ function ConcentrationCalculator({ products }) {
   );
 }
 
-// Komponent notatek klienta
-function ClientNotes({ clientId, salesRepId }) {
-  const [notes, setNotes] = useState([]);
-  const [newNote, setNewNote] = useState('');
-  const [editingNote, setEditingNote] = useState(null);
-  const [expandedNotes, setExpandedNotes] = useState({});
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Pobierz notatki klienta
-  const fetchNotes = useCallback(async () => {
-    if (!clientId) return;
-    
-    setIsLoading(true);
-    try {
-      // Użyj poprawnej kolekcji i zapytania
-      const q = query(
-        collection(db, "notes"), 
-        where("clientId", "==", clientId),
-        orderBy("createdAt", "desc")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const notesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt ? new Date(doc.data().createdAt) : new Date(),
-        updatedAt: doc.data().updatedAt ? new Date(doc.data().updatedAt) : null
-      }));
-      
-      setNotes(notesData);
-    } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clientId]);
-
-  // Efekt przy zmianie klienta
-  useEffect(() => {
-    fetchNotes();
-  }, [clientId, fetchNotes]);
-
-  // Dodaj nową notatkę
-  const addNote = async () => {
-    if (!newNote.trim() || !clientId) return;
-    
-    try {
-      // Dodaj notatkę do kolekcji notes w Firestore
-      await addDoc(collection(db, "notes"), {
-        clientId,
-        salesRepId,
-        content: newNote,
-        createdAt: new Date().toISOString(),
-        updatedAt: null
-      });
-      
-      setNewNote('');
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas dodawania notatki:", error);
-      alert("Wystąpił błąd podczas dodawania notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Aktualizuj notatkę
-  const updateNote = async () => {
-    if (!editingNote || !editingNote.content.trim()) return;
-    
-    try {
-      const noteRef = doc(db, "notes", editingNote.id);
-      await updateDoc(noteRef, {
-        content: editingNote.content,
-        updatedAt: new Date().toISOString()
-      });
-      
-      setEditingNote(null);
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas aktualizacji notatki:", error);
-      alert("Wystąpił błąd podczas aktualizacji notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Usuń notatkę
-  const deleteNote = async (noteId) => {
-    if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
-    
-    try {
-      await deleteDoc(doc(db, "notes", noteId));
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas usuwania notatki:", error);
-      alert("Wystąpił błąd podczas usuwania notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Przełącz rozwinięcie notatki
-  const toggleNoteExpand = (noteId) => {
-    setExpandedNotes(prev => ({
-      ...prev,
-      [noteId]: !prev[noteId]
-    }));
-  };
-
-  // Formatuj datę
-  const formatNoteDate = (date) => {
-    if (!date) return '';
-    return date.toLocaleDateString('pl-PL', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  return (
-    <div className="notes-container mt-6">
-      <h4 className="notes-header text-xl font-bold mb-4">Notatki</h4>
-      
-      <div className="add-note-form mb-6">
-        <textarea
-          className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
-          placeholder="Dodaj nową notatkę..."
-          value={newNote}
-          onChange={(e) => setNewNote(e.target.value)}
-          rows={3}
-        ></textarea>
-        <button
-          className="btn btn-primary"
-          onClick={addNote}
-          disabled={!newNote.trim()}
-        >
-          Dodaj notatkę
-        </button>
-      </div>
-      
-      {isLoading ? (
-        <div className="notes-loading p-4 text-center text-gray-500">Ładowanie notatek...</div>
-      ) : notes.length === 0 ? (
-        <div className="no-notes p-4 text-center text-gray-500">Brak notatek dla tego klienta</div>
-      ) : (
-        <div className="notes-list">
-          {notes.map(note => (
-            <div key={note.id} className="note-item bg-white p-4 rounded shadow mb-4 break-words">
-              {editingNote && editingNote.id === note.id ? (
-                <div className="edit-note-form">
-                  <textarea
-                    className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
-                    value={editingNote.content}
-                    onChange={(e) => setEditingNote({...editingNote, content: e.target.value})}
-                    rows={4}
-                  ></textarea>
-                  <div className="note-actions flex justify-between">
-                    <button 
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setEditingNote(null)}
-                    >
-                      Anuluj
-                    </button>
-                    <button 
-                      className="btn btn-primary btn-sm"
-                      onClick={updateNote}
-                      disabled={!editingNote.content.trim()}
-                    >
-                      Zapisz zmiany
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="note-header flex justify-between mb-2">
-                    <span className="note-date text-gray-600 text-sm">
-                      {formatNoteDate(note.createdAt)}
-                      {note.updatedAt && 
-                        <span className="note-updated"> (edytowano: {formatNoteDate(note.updatedAt)})</span>
-                      }
-                    </span>
-                    <div className="note-actions">
-                      <button 
-                        className="btn btn-secondary btn-sm mr-2"
-                        onClick={() => setEditingNote(note)}
-                      >
-                        Edytuj
-                      </button>
-                      <button 
-                        className="btn btn-danger btn-sm"
-                        onClick={() => deleteNote(note.id)}
-                      >
-                        Usuń
-                      </button>
-                    </div>
-                  </div>
-                  <div className="note-content">
-                    {note.content.length > 200 && !expandedNotes[note.id] ? (
-                      <>
-                        <p>{note.content.substring(0, 200)}...</p>
-                        <button 
-                          className="text-blue-500 text-sm mt-2"
-                          onClick={() => toggleNoteExpand(note.id)}
-                        >
-                          Pokaż więcej
-                        </button>
-                      </>
-                    ) : note.content.length > 200 ? (
-                      <>
-                        <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
-                        <button 
-                          className="text-blue-500 text-sm mt-2"
-                          onClick={() => toggleNoteExpand(note.id)}
-                        >
-                          Pokaż mniej
-                        </button>
-                      </>
-                    ) : (
-                      <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Selektor chłodziw
 function CoolantSelector() {
   const [waterHardness, setWaterHardness] = useState('');
   const [selectedMaterials, setSelectedMaterials] = useState([]);
   const [selectedOperations, setSelectedOperations] = useState([]);
-  const [selectedLubrication, setSelectedLubrication] = useState([]);
-  const [showComponents, setShowComponents] = useState(false);
   const [results, setResults] = useState([]);
   
   const allMaterials = [
@@ -1102,12 +697,6 @@ function CoolantSelector() {
     { id: 'grinding', name: 'Szlifowanie' },
     { id: 'turning', name: 'Toczenie' },
     { id: 'millingDrilling', name: 'Frezowanie/Wiercenie' }
-  ];
-  
-  const allLubrication = [
-    { id: 'low', name: 'Niska' },
-    { id: 'medium', name: 'Średnia' },
-    { id: 'high', name: 'Duża' }
   ];
   
   const handleSelectMaterial = (materialId) => {
@@ -1126,14 +715,6 @@ function CoolantSelector() {
     }
   };
   
-  const handleSelectLubrication = (lubricationId) => {
-    if (selectedLubrication.includes(lubricationId)) {
-      setSelectedLubrication(selectedLubrication.filter(id => id !== lubricationId));
-    } else {
-      setSelectedLubrication([...selectedLubrication, lubricationId]);
-    }
-  };
-  
   const getSuitabilityScore = (suitability) => {
     const scoreMap = {
       'best': 4,
@@ -1146,7 +727,7 @@ function CoolantSelector() {
   };
   
   const findBestCoolants = () => {
-    if (selectedMaterials.length === 0 || selectedOperations.length === 0) {
+    if (!waterHardness || selectedMaterials.length === 0 || selectedOperations.length === 0) {
       return;
     }
     
@@ -1154,7 +735,7 @@ function CoolantSelector() {
     
     const scoredCoolants = coolantDatabase.map(coolant => {
       let isHardnessInRange = true;
-      if (coolant.hardnessRange !== "-" && waterHardness) {
+      if (coolant.hardnessRange !== "-") {
         const [min, max] = coolant.hardnessRange.split('-').map(Number);
         isHardnessInRange = hardnessValue >= min && hardnessValue <= max;
       }
@@ -1169,24 +750,13 @@ function CoolantSelector() {
         operationScore += getSuitabilityScore(coolant.operationTypes[operationId]);
       });
       
-      let lubricationScore = 0;
-      if (selectedLubrication.length > 0) {
-        selectedLubrication.forEach(lubricationId => {
-          lubricationScore += getSuitabilityScore(coolant.lubricationEfficiency[lubricationId]);
-        });
-      } else {
-        // Domyślny wynik dla smarowania jeśli nie wybrano
-        lubricationScore = 2 * 3; // średni wynik × 3 poziomy
-      }
-      
-      const totalScore = isHardnessInRange ? (materialScore + operationScore + lubricationScore) : 0;
+      const totalScore = isHardnessInRange ? (materialScore + operationScore) : 0;
       
       return {
         ...coolant,
         isHardnessInRange,
         materialScore,
         operationScore,
-        lubricationScore,
         totalScore
       };
     });
@@ -1208,17 +778,6 @@ function CoolantSelector() {
     return ratings[rating] || '-';
   };
   
-  const getBadgeColor = (rating) => {
-    const colors = {
-      'best': 'bg-green-600 text-white',
-      'good': 'bg-green-400 text-white',
-      'suitable': 'bg-blue-400 text-white',
-      'conditionally-suitable': 'bg-yellow-400 text-black',
-      'not-suitable': 'bg-gray-200 text-gray-600'
-    };
-    return colors[rating] || 'bg-gray-200';
-  };
-  
   return (
     <div className="tile">
       <div className="tile-header">
@@ -1233,22 +792,20 @@ function CoolantSelector() {
             className="input-field"
             value={waterHardness}
             onChange={(e) => setWaterHardness(e.target.value)}
-            placeholder="Podaj twardość wody (opcjonalnie)"
+            placeholder="Podaj twardość wody"
           />
-          <small className="text-gray-500">Pozostaw puste, jeśli twardość wody nie jest istotna</small>
         </div>
         
         <div className="input-wrapper">
-          <label className="input-label">Materiały obrabiane <span className="text-red-500">*</span></label>
-          <div className="checkbox-container grid grid-cols-2 md:grid-cols-3 gap-2">
+          <label className="input-label">Materiały obrabiane</label>
+          <div className="checkbox-container">
             {allMaterials.map(material => (
-              <div key={material.id} className="checkbox-item flex items-center">
+              <div key={material.id} className="checkbox-item">
                 <input
                   type="checkbox"
                   id={`material-${material.id}`}
                   checked={selectedMaterials.includes(material.id)}
                   onChange={() => handleSelectMaterial(material.id)}
-                  className="mr-2"
                 />
                 <label htmlFor={`material-${material.id}`}>{material.name}</label>
               </div>
@@ -1257,16 +814,15 @@ function CoolantSelector() {
         </div>
         
         <div className="input-wrapper">
-          <label className="input-label">Rodzaj obróbki <span className="text-red-500">*</span></label>
+          <label className="input-label">Rodzaj obróbki</label>
           <div className="checkbox-container">
             {allOperations.map(operation => (
-              <div key={operation.id} className="checkbox-item flex items-center">
+              <div key={operation.id} className="checkbox-item">
                 <input
                   type="checkbox"
                   id={`operation-${operation.id}`}
                   checked={selectedOperations.includes(operation.id)}
                   onChange={() => handleSelectOperation(operation.id)}
-                  className="mr-2"
                 />
                 <label htmlFor={`operation-${operation.id}`}>{operation.name}</label>
               </div>
@@ -1275,28 +831,10 @@ function CoolantSelector() {
         </div>
         
         <div className="input-wrapper">
-          <label className="input-label">Wydajność smarowania (opcjonalnie)</label>
-          <div className="checkbox-container">
-            {allLubrication.map(lubrication => (
-              <div key={lubrication.id} className="checkbox-item flex items-center">
-                <input
-                  type="checkbox"
-                  id={`lubrication-${lubrication.id}`}
-                  checked={selectedLubrication.includes(lubrication.id)}
-                  onChange={() => handleSelectLubrication(lubrication.id)}
-                  className="mr-2"
-                />
-                <label htmlFor={`lubrication-${lubrication.id}`}>{lubrication.name}</label>
-              </div>
-            ))}
-          </div>
-        </div>
-        
-        <div className="input-wrapper mt-4">
           <button
             className="btn btn-primary"
             onClick={findBestCoolants}
-            disabled={selectedMaterials.length === 0 || selectedOperations.length === 0}
+            disabled={!waterHardness || selectedMaterials.length === 0 || selectedOperations.length === 0}
           >
             Znajdź najlepsze chłodziwa
           </button>
@@ -1304,119 +842,52 @@ function CoolantSelector() {
       </div>
       
       {results.length > 0 && (
-        <div className="mt-6">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="font-bold text-lg">Wyniki wyszukiwania</h3>
-            <div className="flex items-center">
-              <input 
-                type="checkbox" 
-                id="show-components" 
-                checked={showComponents} 
-                onChange={() => setShowComponents(!showComponents)}
-                className="mr-2"
-              />
-              <label htmlFor="show-components">Pokaż składniki produktu</label>
-            </div>
-          </div>
-          
-          <div className="mb-4">
-            <div className="flex flex-wrap gap-2 mb-2">
-              {Object.keys({best: 1, good: 1, suitable: 1, 'conditionally-suitable': 1, 'not-suitable': 1}).map(rating => (
-                <div key={rating} className="flex items-center">
-                  <span className={`inline-block px-2 py-1 rounded text-xs font-bold ${getBadgeColor(rating)}`}>
-                    {rating === 'best' ? 'Najlepszy' : 
-                     rating === 'good' ? 'Dobrze dopasowany' : 
-                     rating === 'suitable' ? 'Odpowiedni' : 
-                     rating === 'conditionally-suitable' ? 'Warunkowo odpowiedni' : 
-                     'Nie odpowiedni'} {renderRating(rating)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-          
-          <div className="table-container overflow-x-auto">
-            <table className="data-table w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="p-2 border text-left">Nazwa chłodziwa</th>
-                  <th className="p-2 border text-center">Zakres twardości</th>
-                  <th className="p-2 border text-center">Twardość całkowita</th>
-                  <th className="p-2 border text-center">Zawartość oleju (%)</th>
-                  <th className="p-2 border text-center">Mnożnik refrakcyjny</th>
-                  {showComponents && (
-                    <th className="p-2 border text-center">Składniki</th>
-                  )}
-                  <th className="p-2 border text-center">Dopasowanie do materiałów</th>
-                  <th className="p-2 border text-center">Dopasowanie do obróbki</th>
-                  {selectedLubrication.length > 0 && (
-                    <th className="p-2 border text-center">Wydajność smarowania</th>
-                  )}
-                  <th className="p-2 border text-center">Wynik ogólny</th>
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Nazwa chłodziwa</th>
+                <th>Zakres twardości</th>
+                <th>Zawartość oleju</th>
+                <th>Dopasowanie do materiałów</th>
+                <th>Dopasowanie do obróbki</th>
+                <th>Wynik ogólny</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((coolant, index) => (
+                <tr key={index} className={index % 2 === 0 ? 'row-even' : 'row-odd'}>
+                  <td className="font-bold">{coolant.name}</td>
+                  <td className="text-center">{coolant.hardnessRange}</td>
+                  <td className="text-center">{coolant.oilPercent}%</td>
+                  <td>
+                    {selectedMaterials.map(materialId => (
+                      <div key={materialId} className="rating-item">
+                        <span>{allMaterials.find(m => m.id === materialId).name}:</span>
+                        <span>{renderRating(coolant.materials[materialId])}</span>
+                      </div>
+                    ))}
+                  </td>
+                  <td>
+                    {selectedOperations.map(operationId => (
+                      <div key={operationId} className="rating-item">
+                        <span>{allOperations.find(o => o.id === operationId).name}:</span>
+                        <span>{renderRating(coolant.operationTypes[operationId])}</span>
+                      </div>
+                    ))}
+                  </td>
+                  <td className="text-center font-bold">
+                    {coolant.totalScore}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {results.map((coolant, index) => (
-                  <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                    <td className="p-2 border font-bold">{coolant.name}</td>
-                    <td className="p-2 border text-center">{coolant.hardnessRange}</td>
-                    <td className="p-2 border text-center">{coolant.hardnessTotal}</td>
-                    <td className="p-2 border text-center">{coolant.oilPercent}%</td>
-                    <td className="p-2 border text-center">{coolant.refractionMultiplier}</td>
-                    
-                    {showComponents && (
-                      <td className="p-2 border">
-                        <div className="flex gap-1 flex-wrap">
-                          {coolant.components.bor && <span className="px-1 bg-blue-100 rounded">Bor</span>}
-                          {coolant.components.amin && <span className="px-1 bg-green-100 rounded">Amin</span>}
-                          {coolant.components.dcha && <span className="px-1 bg-yellow-100 rounded">DCHA</span>}
-                          {coolant.components.fad && <span className="px-1 bg-red-100 rounded">FAD</span>}
-                        </div>
-                      </td>
-                    )}
-                    
-                    <td className="p-2 border">
-                      {selectedMaterials.map(materialId => (
-                        <div key={materialId} className="flex justify-between items-center mb-1">
-                          <span className="mr-1">{allMaterials.find(m => m.id === materialId).name}:</span>
-                          <span>{renderRating(coolant.materials[materialId])}</span>
-                        </div>
-                      ))}
-                    </td>
-                    
-                    <td className="p-2 border">
-                      {selectedOperations.map(operationId => (
-                        <div key={operationId} className="flex justify-between items-center mb-1">
-                          <span className="mr-1">{allOperations.find(o => o.id === operationId).name}:</span>
-                          <span>{renderRating(coolant.operationTypes[operationId])}</span>
-                        </div>
-                      ))}
-                    </td>
-                    
-                    {selectedLubrication.length > 0 && (
-                      <td className="p-2 border">
-                        {selectedLubrication.map(lubricationId => (
-                          <div key={lubricationId} className="flex justify-between items-center mb-1">
-                            <span className="mr-1">{allLubrication.find(l => l.id === lubricationId).name}:</span>
-                            <span>{renderRating(coolant.lubricationEfficiency[lubricationId])}</span>
-                          </div>
-                        ))}
-                      </td>
-                    )}
-                    
-                    <td className="p-2 border text-center font-bold">
-                      {coolant.totalScore}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       
-      {selectedMaterials.length > 0 && selectedOperations.length > 0 && results.length === 0 && (
-        <div className="result-tile error mt-4 p-4 bg-red-100 text-red-700 rounded">
+      {waterHardness && selectedMaterials.length > 0 && selectedOperations.length > 0 && results.length === 0 && (
+        <div className="result-tile error">
           Nie znaleziono pasujących chłodziw. Spróbuj zmienić kryteria wyszukiwania.
         </div>
       )}
@@ -1430,7 +901,6 @@ function SalesRepPanel({ currentUser, products }) {
   const [filteredClients, setFilteredClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
   const [reports, setReports] = useState([]);
-  const [notes, setNotes] = useState([]);
   const [newReport, setNewReport] = useState({
     date: new Date().toISOString().split('T')[0],
     zones: Array(7).fill().map(() => ({
@@ -1444,7 +914,6 @@ function SalesRepPanel({ currentUser, products }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddClientModal, setShowAddClientModal] = useState(false);
   const [newClientName, setNewClientName] = useState('');
-  const [activeTab, setActiveTab] = useState('reports');
   
   // Pobierz klientów z Firebase
   const fetchClients = async () => {
@@ -1480,27 +949,6 @@ function SalesRepPanel({ currentUser, products }) {
       console.error("Błąd podczas pobierania raportów:", error);
     }
   };
-
-  // Pobierz notatki dla wybranego klienta
-  const fetchNotes = async (clientId) => {
-    try {
-      const q = query(
-        collection(db, "notes"), 
-        where("clientId", "==", clientId),
-        orderBy("createdAt", "desc")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const notesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      setNotes(notesData);
-    } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
-    }
-  };
   
   // Efekt przy pierwszym ładowaniu
   useEffect(() => {
@@ -1513,7 +961,6 @@ function SalesRepPanel({ currentUser, products }) {
   useEffect(() => {
     if (selectedClient) {
       fetchReports(selectedClient.id);
-      fetchNotes(selectedClient.id);
     }
   }, [selectedClient]);
   
@@ -1601,14 +1048,6 @@ function SalesRepPanel({ currentUser, products }) {
       zones: updatedZones
     });
   };
-
-  // Generuj raport PDF
-  const generatePDF = () => {
-    if (!selectedClient) return;
-    
-    const doc = generateClientReport(selectedClient, reports, notes);
-    doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
-  };
   
   return (
     <div className="tile">
@@ -1661,214 +1100,165 @@ function SalesRepPanel({ currentUser, products }) {
         <div className="reports-section">
           {selectedClient ? (
             <>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="reports-header text-xl font-bold">
-                  {selectedClient.name}
-                </h3>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={generatePDF}
-                >
-                  Generuj PDF
-                </button>
-              </div>
+              <h3 className="reports-header">Raporty - {selectedClient.name}</h3>
               
-              <div className="client-tabs mb-4 border-b">
-                <div className="flex">
-                  <div 
-                    className={`tab-item px-4 py-2 cursor-pointer ${activeTab === 'reports' ? 'border-b-2 border-blue-500 font-bold' : ''}`}
-                    onClick={() => setActiveTab('reports')}
+              <div className="report-form">
+                <h4>Nowy Raport</h4>
+                <div className="form-row">
+                  <label>Data wizyty</label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={newReport.date}
+                    onChange={(e) => setNewReport({...newReport, date: e.target.value})}
+                  />
+                </div>
+                
+                <div className="zones-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Strefa</th>
+                        <th>Produkt</th>
+                        <th>Stężenie (%)</th>
+                        <th>Przewodność (μS/cm)</th>
+                        <th>Temperatura (°C)</th>
+                        <th>pH</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {newReport.zones.map((zone, index) => (
+                        <tr key={index}>
+                          <td>Strefa {index + 1}</td>
+                          <td>
+                            <select
+                              className="input-field"
+                              value={zone.product}
+                              onChange={(e) => updateZoneData(index, 'product', e.target.value)}
+                            >
+                              <option value="">Wybierz produkt</option>
+                              <option value="woda_sieciowa">Woda sieciowa</option>
+                              <option value="woda_demi">Woda DEMI</option>
+                              {products.map(product => (
+                                <option key={product.id} value={product.name}>{product.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              className="input-field"
+                              value={zone.concentration}
+                              onChange={(e) => updateZoneData(index, 'concentration', e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              className="input-field"
+                              value={zone.conductivity}
+                              onChange={(e) => updateZoneData(index, 'conductivity', e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              className="input-field"
+                              value={zone.temperature}
+                              onChange={(e) => updateZoneData(index, 'temperature', e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              step="0.1"
+                              className="input-field"
+                              value={zone.ph}
+                              onChange={(e) => updateZoneData(index, 'ph', e.target.value)}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                <div className="form-actions">
+                  <button
+                    className="btn btn-primary"
+                    onClick={addReport}
                   >
-                    Raporty
-                  </div>
-                  <div 
-                    className={`tab-item px-4 py-2 cursor-pointer ${activeTab === 'notes' ? 'border-b-2 border-blue-500 font-bold' : ''}`}
-                    onClick={() => setActiveTab('notes')}
-                  >
-                    Notatki
-                  </div>
+                    Zapisz raport
+                  </button>
                 </div>
               </div>
               
-              {activeTab === 'reports' && (
-                <>
-                  <div className="report-form">
-                    <h4 className="text-lg font-semibold mb-3">Nowy Raport</h4>
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Data wizyty</label>
-                      <input
-                        type="date"
-                        className="input-field"
-                        value={newReport.date}
-                        onChange={(e) => setNewReport({...newReport, date: e.target.value})}
-                      />
-                    </div>
-                    
-                    <div className="zones-table overflow-x-auto">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr className="bg-gray-100">
-                            <th className="p-2 border">Strefa</th>
-                            <th className="p-2 border">Produkt</th>
-                            <th className="p-2 border">Stężenie (%)</th>
-                            <th className="p-2 border">Przewodność (μS/cm)</th>
-                            <th className="p-2 border">Temperatura (°C)</th>
-                            <th className="p-2 border">pH</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {newReport.zones.map((zone, index) => (
-                            <tr key={index}>
-                              <td className="p-2 border">Strefa {index + 1}</td>
-                              <td className="p-2 border">
-                                <select
-                                  className="input-field w-full"
-                                  value={zone.product}
-                                  onChange={(e) => updateZoneData(index, 'product', e.target.value)}
-                                >
-                                  <option value="">Wybierz produkt</option>
-                                  <option value="woda_sieciowa">Woda sieciowa</option>
-                                  <option value="woda_demi">Woda DEMI</option>
-                                  {products.map(product => (
-                                    <option key={product.id} value={product.name}>{product.name}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.concentration}
-                                  onChange={(e) => updateZoneData(index, 'concentration', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.conductivity}
-                                  onChange={(e) => updateZoneData(index, 'conductivity', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.temperature}
-                                  onChange={(e) => updateZoneData(index, 'temperature', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  className="input-field w-full"
-                                  value={zone.ph}
-                                  onChange={(e) => updateZoneData(index, 'ph', e.target.value)}
-                                />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    
-                    <div className="form-actions mt-4">
-                      <button
-                        className="btn btn-primary"
-                        onClick={addReport}
-                      >
-                        Zapisz raport
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="reports-history mt-6">
-                    <h4 className="text-lg font-semibold mb-3">Historia raportów</h4>
-                    {reports.length === 0 ? (
-                      <p className="no-reports p-4 text-center text-gray-500">Brak historii raportów</p>
-                    ) : (
-                      <div className="reports-list space-y-4">
-                        {reports.map(report => (
-                          <div key={report.id} className="report-item bg-white p-4 rounded shadow">
-                            <div className="report-header mb-3 flex justify-between items-center">
-                              <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
-                              
-                              {/* Przycisk do generowania PDF dla pojedynczego raportu */}
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                  const doc = generateSingleReportPDF(selectedClient, report);
-                                  doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date(report.date).toISOString().split('T')[0]}.pdf`);
-                                }}
-                              >
-                                Generuj PDF
-                              </button>
-                            </div>
-                            <div className="table-container overflow-x-auto">
-                              <table className="data-table w-full border-collapse">
-                                <thead>
-                                  <tr className="bg-gray-100">
-                                    <th className="p-2 border">Strefa</th>
-                                    <th className="p-2 border">Produkt</th>
-                                    <th className="p-2 border">Stężenie (%)</th>
-                                    <th className="p-2 border">Przewodność</th>
-                                    <th className="p-2 border">Temp. (°C)</th>
-                                    <th className="p-2 border">pH</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {report.zones.map((zone, idx) => (
-                                    <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                      <td className="p-2 border">Strefa {idx + 1}</td>
-                                      <td className="p-2 border">{zone.product}</td>
-                                      <td className="p-2 border text-center">{zone.concentration}</td>
-                                      <td className="p-2 border text-center">{zone.conductivity}</td>
-                                      <td className="p-2 border text-center">{zone.temperature}</td>
-                                      <td className="p-2 border text-center">{zone.ph}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        ))}
+              <div className="reports-history">
+                <h4>Historia raportów</h4>
+                {reports.length === 0 ? (
+                  <p className="no-reports">Brak historii raportów</p>
+                ) : (
+                  <div className="reports-list">
+                    {reports.map(report => (
+                      <div key={report.id} className="report-item">
+                        <div className="report-header">
+                          <h5>Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
+                        </div>
+                        <div className="table-container">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Strefa</th>
+                                <th>Produkt</th>
+                                <th>Stężenie (%)</th>
+                                <th>Przewodność</th>
+                                <th>Temp. (°C)</th>
+                                <th>pH</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {report.zones.map((zone, idx) => (
+                                <tr key={idx}>
+                                  <td>Strefa {idx + 1}</td>
+                                  <td>{zone.product}</td>
+                                  <td className="text-center">{zone.concentration}</td>
+                                  <td className="text-center">{zone.conductivity}</td>
+                                  <td className="text-center">{zone.temperature}</td>
+                                  <td className="text-center">{zone.ph}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    )}
+                    ))}
                   </div>
-                </>
-              )}
-              
-              {activeTab === 'notes' && (
-                <ClientNotes 
-                  clientId={selectedClient.id} 
-                  salesRepId={currentUser.id}
-                />
-              )}
+                )}
+              </div>
             </>
           ) : (
-            <div className="no-client-selected p-8 text-center text-gray-500">
-              <p>Wybierz klienta, aby zobaczyć jego raporty i notatki</p>
+            <div className="no-client-selected">
+              <p>Wybierz klienta, aby zobaczyć jego raporty</p>
             </div>
           )}
         </div>
       </div>
       
       {showAddClientModal && (
-        <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
-            <h3 className="modal-title text-xl font-bold mb-4">Dodaj nowego klienta</h3>
-            <div className="modal-form mb-4">
-              <label className="block mb-2">Nazwa klienta</label>
+        <div className="modal">
+          <div className="modal-content">
+            <h3 className="modal-title">Dodaj nowego klienta</h3>
+            <div className="modal-form">
+              <label>Nazwa klienta</label>
               <input
                 type="text"
-                className="input-field w-full"
+                className="input-field"
                 value={newClientName}
                 onChange={(e) => setNewClientName(e.target.value)}
                 placeholder="Podaj nazwę klienta"
               />
             </div>
-            <div className="modal-actions flex justify-end space-x-2">
+            <div className="modal-actions">
               <button
                 className="btn btn-secondary"
                 onClick={() => setShowAddClientModal(false)}
@@ -2373,10 +1763,8 @@ function ClientManagement() {
   const [clients, setClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
   const [reports, setReports] = useState([]);
-  const [notes, setNotes] = useState([]);
   const [salesReps, setSalesReps] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState('reports');
   
   // Pobierz wszystkich klientów
   const fetchAllClients = async () => {
@@ -2430,28 +1818,6 @@ function ClientManagement() {
       setReports([]);
     }
   };
-
-  // Pobierz notatki dla wybranego klienta
-  const fetchClientNotes = async (clientId) => {
-    try {
-      const q = query(
-        collection(db, "notes"), 
-        where("clientId", "==", clientId),
-        orderBy("createdAt", "desc")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const notesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      setNotes(notesData);
-    } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
-      setNotes([]);
-    }
-  };
   
   // Przypisz klienta do handlowca
   const assignClientToSalesRep = async (clientId, salesRepId) => {
@@ -2467,15 +1833,7 @@ function ClientManagement() {
     } catch (error) {
       console.error("Błąd podczas przypisywania klienta:", error);
       alert("Wystąpił błąd podczas przypisywania klienta");
-          }
-  };
-
-  // Generuj raport PDF
-  const generatePDF = () => {
-    if (!selectedClient) return;
-    
-    const doc = generateClientReport(selectedClient, reports, notes);
-    doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+    }
   };
   
   // Efekt przy pierwszym ładowaniu
@@ -2488,7 +1846,6 @@ function ClientManagement() {
   useEffect(() => {
     if (selectedClient) {
       fetchClientReports(selectedClient.id);
-      fetchClientNotes(selectedClient.id);
     }
   }, [selectedClient]);
   
@@ -2551,120 +1908,73 @@ function ClientManagement() {
         <div className="client-details">
           {selectedClient ? (
             <>
-              <div className="client-header flex justify-between items-center mb-4">
-                <h4 className="text-xl font-bold">{selectedClient.name}</h4>
-                <div className="flex space-x-2">
-                  <button 
-                    className="btn btn-primary" 
-                    onClick={generatePDF}
+              <div className="client-header">
+                <h4>{selectedClient.name}</h4>
+                <div className="client-assign">
+                  <span>Przypisz do:</span>
+                  <select
+                    className="input-field"
+                    value={selectedClient.salesRepId || ''}
+                    onChange={(e) => assignClientToSalesRep(selectedClient.id, e.target.value)}
                   >
-                    Generuj PDF
-                  </button>
-                  <div className="client-assign ml-4">
-                    <span className="mr-2">Przypisz do:</span>
-                    <select
-                      className="input-field"
-                      value={selectedClient.salesRepId || ''}
-                      onChange={(e) => assignClientToSalesRep(selectedClient.id, e.target.value)}
-                    >
-                      <option value="">Wybierz handlowca</option>
-                      {salesReps.map(rep => (
-                        <option key={rep.id} value={rep.id}>{rep.username}</option>
-                      ))}
-                    </select>
-                  </div>
+                    <option value="">Wybierz handlowca</option>
+                    {salesReps.map(rep => (
+                      <option key={rep.id} value={rep.id}>{rep.username}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               
-              <div className="client-tabs mb-4 border-b">
-                <div className="flex">
-                  <div 
-                    className={`tab-item px-4 py-2 cursor-pointer ${activeTab === 'reports' ? 'border-b-2 border-blue-500 font-bold' : ''}`}
-                    onClick={() => setActiveTab('reports')}
-                  >
-                    Raporty
-                  </div>
-                  <div 
-                    className={`tab-item px-4 py-2 cursor-pointer ${activeTab === 'notes' ? 'border-b-2 border-blue-500 font-bold' : ''}`}
-                    onClick={() => setActiveTab('notes')}
-                  >
-                    Notatki
-                  </div>
-                </div>
-              </div>
-              
-              {activeTab === 'reports' && (
-                <>
-                  <h4 className="text-lg font-semibold mb-3">Historia raportów</h4>
-                  {reports.length === 0 ? (
-                    <p className="no-reports p-4 text-center text-gray-500">Brak historii raportów</p>
-                  ) : (
-                    <div className="reports-list space-y-4">
-                      {reports.map(report => (
-                        <div key={report.id} className="report-item bg-white p-4 rounded shadow">
-                          <div className="report-header mb-3 flex justify-between items-center">
-                            <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
-                            
-                            {/* Przycisk do generowania PDF dla pojedynczego raportu */}
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => {
-                                const doc = generateSingleReportPDF(selectedClient, report);
-                                doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date(report.date).toISOString().split('T')[0]}.pdf`);
-                              }}
-                            >
-                              Generuj PDF
-                            </button>
-                          </div>
-                          <div className="table-container overflow-x-auto">
-                            <table className="data-table w-full border-collapse">
-                              <thead>
-                                <tr className="bg-gray-100">
-                                  <th className="p-2 border">Strefa</th>
-                                  <th className="p-2 border">Produkt</th>
-                                  <th className="p-2 border">Stężenie (%)</th>
-                                  <th className="p-2 border">Przewodność</th>
-                                  <th className="p-2 border">Temp. (°C)</th>
-                                  <th className="p-2 border">pH</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {report.zones.map((zone, idx) => (
-                                  <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                    <td className="p-2 border">Strefa {idx + 1}</td>
-                                    <td className="p-2 border">{zone.product}</td>
-                                    <td className="p-2 border text-center">{zone.concentration}</td>
-                                    <td className="p-2 border text-center">{zone.conductivity}</td>
-                                    <td className="p-2 border text-center">{zone.temperature}</td>
-                                    <td className="p-2 border text-center">{zone.ph}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      ))}
+              <h4>Historia raportów</h4>
+              {reports.length === 0 ? (
+                <p className="no-reports">Brak historii raportów</p>
+              ) : (
+                <div className="reports-list">
+                  {reports.map(report => (
+                    <div key={report.id} className="report-item">
+                      <div className="report-header">
+                        <h5>Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
+                      </div>
+                      <div className="table-container">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Strefa</th>
+                              <th>Produkt</th>
+                              <th>Stężenie (%)</th>
+                              <th>Przewodność</th>
+                              <th>Temp. (°C)</th>
+                              <th>pH</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {report.zones.map((zone, idx) => (
+                              <tr key={idx}>
+                                <td>Strefa {idx + 1}</td>
+                                <td>{zone.product}</td>
+                                <td className="text-center">{zone.concentration}</td>
+                                <td className="text-center">{zone.conductivity}</td>
+                                <td className="text-center">{zone.temperature}</td>
+                                <td className="text-center">{zone.ph}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  )}
-                </>
-              )}
-              
-              {activeTab === 'notes' && (
-                <ClientNotes 
-                  clientId={selectedClient.id} 
-                  salesRepId={selectedClient.salesRepId}
-                />
+                  ))}
+                </div>
               )}
             </>
           ) : (
-            <div className="no-client-selected p-8 text-center text-gray-500">
+            <div className="no-client-selected">
               <p>Wybierz klienta, aby zobaczyć szczegóły</p>
             </div>
           )}
         </div>
       </div>
     </div>
-  ); 
+  );
 }
 
 // Panel administratora
