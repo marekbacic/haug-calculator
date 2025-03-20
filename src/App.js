@@ -20,10 +20,8 @@ import {
   onAuthStateChanged 
 } from 'firebase/auth';
 import './index.css';
-// Corrected jsPDF imports
-import { jsPDF } from 'jspdf';
-// Explicitly import autoTable plugin
-import autoTable from 'jspdf-autotable';
+// Importuj bibliotekę html2pdf.js
+import html2pdf from 'html2pdf.js';
 
 // Pełna baza danych chłodziw na podstawie tabeli
 const coolantDatabase = [
@@ -308,6 +306,18 @@ const coolantDatabase = [
   }
 ];
 
+// Funkcja do formatowania polskiej daty
+const formatDateInPolish = (date) => {
+  if (!date) return '';
+  
+  const months = [
+    'stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca',
+    'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'
+  ];
+  
+  return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+};
+
 // Pomocnicza funkcja do formatowania daty
 const formatDate = (dateString) => {
   if (!dateString) return '';
@@ -319,168 +329,1138 @@ const formatDate = (dateString) => {
   });
 };
 
-// Generowanie raportu PDF dla całego klienta
-function generateClientReport(client, reports, notes) {
-  // Tworzenie instancji jsPDF
-  const doc = new jsPDF();
+// Funkcja do obliczania numeru raportu - zmodyfikowana, aby była globalna
+async function calculateReportNumber() {
+  const currentYear = new Date().getFullYear();
   
-  // Tytuł
-  doc.setFontSize(18);
-  doc.text(`Raport dla klienta: ${client.name}`, 14, 20);
+  // Pobierz wszystkie raporty z bieżącego roku, niezależnie od klienta
+  const startOfYear = new Date(`${currentYear}-01-01T00:00:00`);
+  const endOfYear = new Date(`${currentYear}-12-31T23:59:59`);
   
-  doc.setFontSize(12);
-  doc.text(`Data wygenerowania: ${new Date().toLocaleString('pl-PL')}`, 14, 30);
+  try {
+    const q = query(
+      collection(db, "reports"), 
+      where("date", ">=", startOfYear.toISOString()),
+      where("date", "<=", endOfYear.toISOString()),
+      orderBy("date", "desc")
+    );
+    
+    const querySnapshot = await getDocs(q);
+    // Liczba raportów + 1 będzie nowym numerem
+    const reportCount = querySnapshot.docs.length;
+    return reportCount + 1;
+  } catch (error) {
+    console.error("Błąd podczas pobierania raportów:", error);
+    // W przypadku błędu, użyj timestamp jako unikalne ID
+    return Math.floor(Date.now() / 1000) % 1000;
+  }
+}
+
+// Generowanie raportu PDF dla całego klienta z użyciem html2pdf
+async function generateClientReport(client, reports, notes) {
+  if (!client) return null;
   
-  // Historia raportów
-  doc.setFontSize(14);
-  doc.text('Historia raportów', 14, 45);
+  // Przygotuj dane dla raportu
+  const currentDate = new Date().toLocaleDateString('pl-PL');
   
-  let yPos = 55;
+  // Tworzenie HTML
+  let html = `
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          h1, h2, h3 { color: #333; }
+          table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+          th { background-color: #4682B4; color: white; padding: 8px; }
+          td { border: 1px solid #ddd; padding: 8px; }
+          .note { margin: 15px 0; padding: 10px; background-color: #f9f9f9; }
+          .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #666; }
+        </style>
+      </head>
+      <body>
+        <h1>Raport dla klienta: ${client.name}</h1>
+        <p>Data wygenerowania: ${currentDate}</p>
+        
+        <h2>Historia raportów</h2>
+  `;
   
   if (!reports || reports.length === 0) {
-    doc.setFontSize(12);
-    doc.text('Brak historii raportów', 14, yPos);
-    yPos += 10;
+    html += '<p>Brak historii raportów</p>';
   } else {
-    reports.forEach((report, index) => {
-      // Sprawdź, czy potrzebna nowa strona
-      if (yPos > 270) {
-        doc.addPage();
-        yPos = 20;
-      }
+    reports.forEach(report => {
+      html += `
+        <div class="report">
+          <h3>Raport z dnia ${formatDate(report.date)}</h3>
+      `;
       
-      doc.setFontSize(12);
-      doc.text(`Raport z dnia ${formatDate(report.date)}`, 14, yPos);
-      yPos += 10;
-      
-      // Tabela danych dla stref
       if (report.zones && report.zones.length > 0) {
-        // Przygotuj dane do tabeli
-        const tableData = report.zones.map((zone, idx) => [
-          `Strefa ${idx + 1}`,
-          zone.product || '-',
-          zone.concentration || '-',
-          zone.conductivity || '-',
-          zone.temperature || '-',
-          zone.ph || '-'
-        ]);
+        html += `
+          <table>
+            <thead>
+              <tr>
+                <th>Strefa</th>
+                <th>Produkt</th>
+                <th>Stężenie (%)</th>
+                <th>Przewodność</th>
+                <th>Temperatura (°C)</th>
+                <th>pH</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
         
-        // Use autoTable directly
-        autoTable(doc, {
-          startY: yPos,
-          head: [['Strefa', 'Produkt', 'Stężenie (%)', 'Przewodność', 'Temp. (°C)', 'pH']],
-          body: tableData,
-          theme: 'striped',
-          headStyles: { fillColor: [66, 133, 244] },
-          margin: { top: 10 }
+        report.zones.forEach((zone, idx) => {
+          html += `
+            <tr>
+              <td>Strefa ${idx + 1}</td>
+              <td>${zone.product || '-'}</td>
+              <td>${zone.concentration || '-'}</td>
+              <td>${zone.conductivity || '-'}</td>
+              <td>${zone.temperature || '-'}</td>
+              <td>${zone.ph || '-'}</td>
+            </tr>
+          `;
         });
         
-        // Zapisz nową pozycję Y po tabeli
-        yPos = doc.lastAutoTable.finalY + 15;
+        html += `
+            </tbody>
+          </table>
+        `;
       }
+      
+      if (report.summary) {
+        html += `
+          <div class="summary">
+            <h4>Podsumowanie:</h4>
+            <p>${report.summary.replace(/\n/g, '<br>')}</p>
+          </div>
+        `;
+      }
+      
+      html += '</div>';
     });
   }
   
-  // Notatki
-  doc.addPage();
-  yPos = 20;
-  
-  doc.setFontSize(14);
-  doc.text('Notatki', 14, yPos);
-  yPos += 10;
+  html += '<h2>Notatki</h2>';
   
   if (!notes || notes.length === 0) {
-    doc.setFontSize(12);
-    doc.text('Brak notatek', 14, yPos);
+    html += '<p>Brak notatek</p>';
   } else {
-    notes.forEach((note, index) => {
-      // Sprawdź, czy potrzebna nowa strona
-      if (yPos > 250) {
-        doc.addPage();
-        yPos = 20;
-      }
+    notes.forEach(note => {
+      const createdDate = note.createdAt ? new Date(note.createdAt).toLocaleDateString('pl-PL', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }) : '';
       
-      doc.setFontSize(11);
-      doc.text(`Data: ${formatDate(note.createdAt)}`, 14, yPos);
-      yPos += 6;
+      const updatedDate = note.updatedAt ? new Date(note.updatedAt).toLocaleDateString('pl-PL', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }) : '';
       
-      if (note.updatedAt) {
-        doc.text(`Edytowano: ${formatDate(note.updatedAt)}`, 14, yPos);
-        yPos += 6;
-      }
-      
-      doc.setFontSize(10);
-      
-      // Dzielimy tekst notatki na linie pasujące do szerokości strony
-      const splitText = doc.splitTextToSize(note.content, 180);
-      doc.text(splitText, 14, yPos);
-      
-      yPos += (splitText.length * 5) + 15;
-      
-      // Dodaj linię oddzielającą notatki
-      if (index < notes.length - 1) {
-        doc.setDrawColor(200, 200, 200);
-        doc.line(14, yPos - 7, 196, yPos - 7);
-      }
+      html += `
+        <div class="note">
+          <p><strong>Data:</strong> ${createdDate}</p>
+          ${note.updatedAt ? `<p><strong>Edytowano:</strong> ${updatedDate}</p>` : ''}
+          <p>${note.content.replace(/\n/g, '<br>')}</p>
+        </div>
+      `;
     });
   }
   
-  // Stopka
-  doc.setFontSize(8);
-  const totalPages = doc.internal.getNumberOfPages();
+  html += `
+        <div class="footer">
+          Haug Chemie®Polska HelpDesk
+        </div>
+      </body>
+    </html>
+  `;
   
-  for (let i = 1; i <= totalPages; i++) {
-    doc.setPage(i);
-    doc.text(`Haug Chemie®Polska HelpDesk - Strona ${i} z ${totalPages}`, 14, 290);
+  // Konwersja HTML do PDF z użyciem html2pdf
+  const element = document.createElement('div');
+  element.innerHTML = html;
+  document.body.appendChild(element);
+  
+  try {
+    const opt = {
+      margin: 10,
+      filename: `raport_${client.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    
+    await html2pdf().from(element).set(opt).save();
+    document.body.removeChild(element);
+    return true;
+  } catch (error) {
+    console.error("Błąd podczas generowania PDF:", error);
+    document.body.removeChild(element);
+    return null;
   }
-  
-  return doc;
 }
 
 // Generowanie pojedynczego raportu PDF
-function generateSingleReportPDF(client, report) {
-  const doc = new jsPDF();
+async function generateSingleReportPDF(client, report) {
+  if (!client || !report) return null;
   
-  // Tytuł
-  doc.setFontSize(18);
-  doc.text(`Raport dla: ${client.name}`, 14, 20);
+  // Tworzenie HTML
+  let html = `
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          h1, h2, h3 { color: #333; }
+          table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+          th { background-color: #4682B4; color: white; padding: 8px; }
+          td { border: 1px solid #ddd; padding: 8px; }
+          .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #666; }
+        </style>
+      </head>
+      <body>
+        <h1>Raport dla: ${client.name}</h1>
+        <p><strong>Data raportu:</strong> ${new Date(report.date).toLocaleDateString('pl-PL')}</p>
+        <p><strong>Data wygenerowania:</strong> ${new Date().toLocaleDateString('pl-PL')}</p>
+  `;
   
-  doc.setFontSize(14);
-  doc.text(`Data raportu: ${new Date(report.date).toLocaleDateString('pl-PL')}`, 14, 30);
-  doc.text(`Data wygenerowania: ${new Date().toLocaleDateString('pl-PL')}`, 14, 40);
-  
-  // Tabela danych dla stref
   if (report.zones && report.zones.length > 0) {
-    // Przygotuj dane do tabeli
-    const tableData = report.zones.map((zone, idx) => [
-      `Strefa ${idx + 1}`,
-      zone.product || '-',
-      zone.concentration || '-',
-      zone.conductivity || '-',
-      zone.temperature || '-',
-      zone.ph || '-'
-    ]);
+    html += `
+      <table>
+        <thead>
+          <tr>
+            <th>Strefa</th>
+            <th>Produkt</th>
+            <th>Stężenie (%)</th>
+            <th>Przewodność</th>
+            <th>Temperatura (°C)</th>
+            <th>pH</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
     
-    // Use autoTable directly
-    autoTable(doc, {
-      startY: 50,
-      head: [['Strefa', 'Produkt', 'Stężenie (%)', 'Przewodność', 'Temp. (°C)', 'pH']],
-      body: tableData,
-      theme: 'striped',
-      headStyles: { fillColor: [66, 133, 244] },
-      margin: { top: 10 }
+    report.zones.forEach((zone, idx) => {
+      html += `
+        <tr>
+          <td>Strefa ${idx + 1}</td>
+          <td>${zone.product || '-'}</td>
+          <td>${zone.concentration || '-'}</td>
+          <td>${zone.conductivity || '-'}</td>
+          <td>${zone.temperature || '-'}</td>
+          <td>${zone.ph || '-'}</td>
+        </tr>
+      `;
     });
+    
+    html += `
+        </tbody>
+      </table>
+    `;
   }
   
-  // Stopka
-  doc.setFontSize(8);
-  doc.text(`Haug Chemie®Polska HelpDesk - Raport z dnia ${new Date(report.date).toLocaleDateString('pl-PL')}`, 14, 290);
+  if (report.summary) {
+    html += `
+      <div class="summary">
+        <h3>Podsumowanie:</h3>
+        <p>${report.summary.replace(/\n/g, '<br>')}</p>
+      </div>
+    `;
+  }
   
-  return doc;
+  html += `
+        <div class="footer">
+          Haug Chemie®Polska HelpDesk - Raport z dnia ${new Date(report.date).toLocaleDateString('pl-PL')}
+        </div>
+      </body>
+    </html>
+  `;
+  
+  // Konwersja HTML do PDF
+  const element = document.createElement('div');
+  element.innerHTML = html;
+  document.body.appendChild(element);
+  
+  try {
+    const opt = {
+      margin: 10,
+      filename: `raport_${client.name.replace(/\s+/g, '_')}_${new Date(report.date).toISOString().split('T')[0]}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    
+    await html2pdf().from(element).set(opt).save();
+    document.body.removeChild(element);
+    return true;
+  } catch (error) {
+    console.error("Błąd podczas generowania PDF:", error);
+    document.body.removeChild(element);
+    return null;
+  }
+}
+
+// Zmodyfikowana funkcja generowania raportu PDF na papierze firmowym
+async function generateCompanyReportPDF(client, report, companyData = {}) {
+  if (!client || !report) return null;
+  
+  try {
+    // Oblicz numer raportu (zmodyfikowane - globalny numer)
+    const reportNumber = await calculateReportNumber();
+    // Format: XX/ANL/YYYY (zgodnie z przykładem 23/ANL/2025)
+    const formattedReportNumber = `${reportNumber}/ANL/${new Date().getFullYear()}`;
+    
+    // Format daty raportu
+    const reportDate = new Date(report.date);
+    const formattedReportDate = formatDateInPolish(reportDate);
+    
+    // Format aktualnej daty
+    const currentDate = new Date();
+    const formattedCurrentDate = `${currentDate.getDate()}.${currentDate.getMonth() + 1}.${currentDate.getFullYear()}`;
+    
+    // Użyj niestandardowego celu badań jeśli jest dostępny
+    const researchGoal = report.researchGoal || "Kontrola parametrów procesów.";
+    
+    // Przygotuj HTML dokumentu
+    const reportHtml = `
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            @font-face {
+              font-family: 'Roboto';
+              font-style: normal;
+              font-weight: 400;
+              src: url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+            }
+            body {
+              font-family: 'Roboto', Arial, sans-serif;
+              margin: 0;
+              padding: 0;
+              position: relative;
+              font-size: 10pt; /* Zmniejszono rozmiar czcionki z 11pt */
+            }
+            .page-container {
+              position: relative;
+              page-break-after: always;
+            }
+            .page-container:last-child {
+              page-break-after: auto;
+            }
+            .letterhead {
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 297mm; /* Pełna wysokość strony A4 */
+              z-index: -1;
+            }
+            .content {
+              padding-top: 35mm; /* Zmniejszono margines z góry */
+              padding-left: 20mm;
+              padding-right: 20mm;
+              padding-bottom: 40mm; /* Zwiększono margines z dołu, aby zmieścić stopkę */
+              z-index: 1;
+            }
+            .header {
+              margin-bottom: 8mm; /* Zmniejszono odstęp */
+            }
+            .client-data {
+              margin-bottom: 4mm; /* Zmniejszono odstęp */
+            }
+            .date {
+              text-align: right;
+              margin-bottom: 8mm; /* Zmniejszono odstęp */
+            }
+            .report-title-box {
+              border: 1px solid black;
+              padding: 2mm; /* Zmniejszono padding */
+              text-align: center;
+              margin-bottom: 4mm; /* Zmniejszono odstęp */
+            }
+            .report-date {
+              text-align: center;
+              margin-bottom: 8mm; /* Zmniejszono odstęp */
+            }
+            .section {
+              margin-bottom: 3mm; /* Zmniejszono odstęp */
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 6mm; /* Zmniejszono odstęp */
+              font-size: 9pt; /* Mniejsza czcionka w tabeli */
+            }
+            th {
+              background-color: #e74c3c;
+              color: white;
+              font-weight: normal;
+              text-align: center;
+              padding: 1.5mm; /* Zmniejszono padding */
+              border: 1px solid #ccc;
+            }
+            td {
+              padding: 1.5mm; /* Zmniejszono padding */
+              border: 1px solid #ccc;
+              text-align: center;
+            }
+            .result-item {
+              margin-left: 5mm;
+              margin-bottom: 1mm; /* Zmniejszono odstęp */
+            }
+            .signature {
+              margin-top: 10mm; /* Jeszcze bardziej zmniejszono margines */
+            }
+            .page-number {
+              position: absolute;
+              bottom: 10mm;
+              right: 20mm;
+              font-size: 8pt;
+            }
+            .page-footer {
+              position: absolute;
+              bottom: 25mm; /* Zwiększono odległość od dołu strony */
+              left: 0;
+              width: 100%;
+              text-align: center;
+              font-size: 8pt;
+              color: #666;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="page-container">
+            <div class="letterhead">
+              <!-- Tło papieru firmowego jako obraz -->
+              <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+            </div>
+            
+            <div class="content">
+              <!-- Data w prawym górnym rogu -->
+              <div class="date">Pułtusk, ${formattedCurrentDate}</div>
+              
+              <!-- Dane klienta -->
+              <div class="client-data">
+                ${client.name}<br>
+                ${client.address || ''}<br>
+                ${client.postalCode || ''} ${client.city || ''}
+              </div>
+              
+              <!-- Tytuł raportu w ramce -->
+              <div class="report-title-box">
+                Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
+              </div>
+              
+              <!-- Data raportu -->
+              <div class="report-date">
+                ${formattedReportDate} roku
+              </div>
+              
+              <!-- Sekcje raportu -->
+              <div class="section">
+                1. Wykonawcy: ${companyData.username || ""}
+              </div>
+              
+              <div class="section">
+                2. Cel badań: ${researchGoal}
+              </div>
+              
+              <div class="section">
+                3. Parametry pracy kąpieli w poszczególnych strefach:
+              </div>
+              
+              <!-- Nazwa procesu -->
+              <div class="section">
+                ${report.processName || 'Proces przygotowania powierzchni'}:
+              </div>
+              
+              <!-- Tabela parametrów -->
+              <table>
+                <thead>
+                  <tr>
+                    <th>Strefa</th>
+                    <th>Stęż. preparatu</th>
+                    <th>Odczyn pH</th>
+                    <th>Przewodność</th>
+                    <th>Temperatura</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${report.zones.map((zone, idx) => `
+                    <tr>
+                      <td>${idx + 1}. ${zone.product || '-'}</td>
+                      <td>${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
+                      <td>${zone.ph || 'x'}</td>
+                      <td>${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
+                      <td>${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+              
+              <!-- Rezultaty -->
+              <div class="section">
+                4. Rezultaty:
+              </div>
+              
+              <div class="results-container">
+                ${report.summary ? 
+                  report.summary.split('\n').map(line => 
+                    line.trim() ? `<div class="result-item">• ${line.trim()}</div>` : ''
+                  ).join('') : 
+                  '<div class="result-item">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
+                }
+              </div>
+              
+              <!-- Podpis -->
+              <div class="signature">
+                Z poważaniem,<br>
+                ${companyData.username || ""}<br>
+                Doradca Techniczno-Handlowy
+              </div>
+              
+              <!-- Stopka na każdej stronie -->
+              <div class="page-footer">
+                Haug Chemie®Polska HelpDesk
+              </div>
+              
+              <div class="page-number">Strona 1</div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    // Konwersja HTML do PDF
+    const element = document.createElement('div');
+    element.innerHTML = reportHtml;
+    document.body.appendChild(element);
+    
+    try {
+      const opt = {
+        margin: 0,
+        filename: `raport_${client.name.replace(/\s+/g, '_')}_${reportDate.toISOString().split('T')[0]}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+          scale: 2, 
+          useCORS: true,
+          windowWidth: 1024,
+          height: 1123, // Zdefiniowana wysokość dokumentu (297mm w pikselach przy 96 dpi * scale 2)
+          logging: true, // Włączone logowanie dla łatwiejszego debugowania
+          letterRendering: true // Lepsza jakość renderowania tekstu
+        },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+        jsPDF: { 
+          unit: 'mm', 
+          format: 'a4', 
+          orientation: 'portrait',
+          compress: true,
+          precision: 16 // Zwiększona precyzja
+        }
+      };
+      
+      await html2pdf().from(element).set(opt).save();
+      document.body.removeChild(element);
+      return true;
+    } catch (error) {
+      console.error("Błąd podczas generowania PDF:", error);
+      document.body.removeChild(element);
+      return null;
+    }
+  } catch (error) {
+    console.error("Błąd podczas przygotowywania raportu:", error);
+    return null;
+  }
+}
+
+// Dodatkowa funkcja do obsługi wielostronicowych raportów
+async function generateMultiPageReportPDF(client, report, companyData = {}) {
+  if (!client || !report) return null;
+  
+  try {
+    // Oblicz numer raportu (zmodyfikowane - globalny numer)
+    const reportNumber = await calculateReportNumber();
+    const formattedReportNumber = `${reportNumber}/ANL/${new Date().getFullYear()}`;
+    
+    // Dane formatowania
+    const reportDate = new Date(report.date);
+    const formattedReportDate = formatDateInPolish(reportDate);
+    const currentDate = new Date();
+    const formattedCurrentDate = `${currentDate.getDate()}.${currentDate.getMonth() + 1}.${currentDate.getFullYear()}`;
+    
+    // Użyj niestandardowego celu badań jeśli jest dostępny
+    const researchGoal = report.researchGoal || "Kontrola parametrów procesów.";
+    
+    // Przygotuj styl i nagłówek dokumentu
+    const headerHtml = `
+      <div style="padding: 10mm 20mm 0 20mm;">
+        <div style="text-align: right; margin-bottom: 5mm;">Pułtusk, ${formattedCurrentDate}</div>
+        <div style="margin-bottom: 5mm;">
+          ${client.name}<br>
+          ${client.address || ''}<br>
+          ${client.postalCode || ''} ${client.city || ''}
+        </div>
+        <div style="border: 1px solid black; padding: 2mm; text-align: center; margin-bottom: 5mm;">
+          Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
+        </div>
+        <div style="text-align: center; margin-bottom: 8mm;">${formattedReportDate} roku</div>
+      </div>
+    `;
+    
+    // Przygotuj sekcje raportu
+    const contentHtml = `
+      <div style="padding: 0 20mm;">
+        <div style="margin-bottom: 3mm;">1. Wykonawcy: ${companyData.username || ""}</div>
+        <div style="margin-bottom: 3mm;">2. Cel badań: ${researchGoal}</div>
+        <div style="margin-bottom: 3mm;">3. Parametry pracy kąpieli w poszczególnych strefach:</div>
+        <div style="margin-bottom: 3mm;">${report.processName || 'Proces przygotowania powierzchni'}:</div>
+        
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 6mm; font-size: 9pt;">
+          <thead>
+            <tr>
+              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Strefa</th>
+              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Stęż. preparatu</th>
+              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Odczyn pH</th>
+              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Przewodność</th>
+              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Temperatura</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${report.zones.map((zone, idx) => `
+              <tr>
+                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${idx + 1}. ${zone.product || '-'}</td>
+                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
+                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.ph || 'x'}</td>
+                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
+                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        
+        <div style="margin-bottom: 3mm;">4. Rezultaty:</div>
+        
+        ${report.summary ? 
+          report.summary.split('\n').map(line => 
+            line.trim() ? `<div style="margin-left: 5mm; margin-bottom: 1mm;">• ${line.trim()}</div>` : ''
+          ).join('') : 
+          '<div style="margin-left: 5mm; margin-bottom: 1mm;">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
+        }
+        
+        <div style="margin-top: 15mm;">
+          Z poważaniem,<br>
+          ${companyData.username || ""}<br>
+          Doradca Techniczno-Handlowy
+        </div>
+      </div>
+    `;
+    
+    // Przygotuj pełny HTML raportu z obsługą wielu stron
+    const reportHtml = `
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            @font-face {
+              font-family: 'Roboto';
+              font-style: normal;
+              font-weight: 400;
+              src: url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+            }
+            body {
+              font-family: 'Roboto', Arial, sans-serif;
+              margin: 0;
+              padding: 0;
+              font-size: 9.5pt;
+              position: relative;
+            }
+            .page {
+              position: relative;
+              width: 210mm;
+              height: 297mm;
+              page-break-after: always;
+              overflow: hidden;
+            }
+            .page:last-of-type {
+              page-break-after: auto;
+            }
+            .letterhead {
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              z-index: -1;
+            }
+            .footer {
+              position: absolute;
+              bottom: 10mm;
+              left: 0;
+              width: 100%;
+              text-align: center;
+              font-size: 8pt;
+              color: #666;
+            }
+            .page-number {
+              position: absolute;
+              bottom: 10mm;
+              right: 20mm;
+              font-size: 8pt;
+            }
+            @page {
+              margin: 0;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <div class="letterhead">
+              <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+            </div>
+            ${headerHtml}
+            ${contentHtml}
+            <div class="footer">Haug Chemie®Polska HelpDesk</div>
+            <div class="page-number">Strona 1</div>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    // Konwersja HTML do PDF z obsługą wielu stron
+    const element = document.createElement('div');
+    element.innerHTML = reportHtml;
+    document.body.appendChild(element);
+    
+    try {
+      const opt = {
+        margin: 0,
+        filename: `raport_${client.name.replace(/\s+/g, '_')}_${reportDate.toISOString().split('T')[0]}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+          scale: 2, 
+          useCORS: true,
+          windowWidth: 1024
+        },
+        pagebreak: { 
+          mode: ['avoid-all', 'css', 'legacy'],
+          before: '.page-break',
+          after: '.page'
+        },
+        jsPDF: { 
+          unit: 'mm', 
+          format: 'a4', 
+          orientation: 'portrait',
+          compress: true
+        },
+        // Ustawia funkcję wywołania zwrotnego HTML2PDF dla dodawania nagłówka i stopki do każdej strony
+        html2canvas: {
+          onclone: function(doc) {
+            // Tutaj można zmodyfikować klonowany dokument przed renderowaniem
+            const pages = doc.querySelectorAll('.page');
+            pages.forEach((page, index) => {
+              // Aktualizacja numeru strony
+              const pageNumber = page.querySelector('.page-number');
+              if (pageNumber) {
+                pageNumber.textContent = `Strona ${index + 1}`;
+              }
+              
+              // Dodaj nowy papier firmowy do stron po pierwszej stronie
+              if (index > 0) {
+                const letterhead = doc.createElement('div');
+                letterhead.className = 'letterhead';
+                letterhead.innerHTML = `<img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
+                page.insertBefore(letterhead, page.firstChild);
+              }
+            });
+          }
+        }
+      };
+      
+      await html2pdf().from(element).set(opt).save();
+      document.body.removeChild(element);
+      return true;
+    } catch (error) {
+      console.error("Błąd podczas generowania PDF:", error);
+      document.body.removeChild(element);
+      return null;
+    }
+  } catch (error) {
+    console.error("Błąd podczas przygotowywania raportu:", error);
+    return null;
+  }
+}
+
+// Komponent ulepszonej tabeli stref - lepsze wyświetlanie i stylowanie
+function EnhancedZonesTable({ zones, onChange, products = [] }) {
+  // Dodaj dodatkowe style CSS dla poprawy wyświetlania tabeli
+  const tableStyles = {
+    container: {
+      overflowX: 'auto',
+      maxWidth: '100%',
+      border: '1px solid #ddd',
+      borderRadius: '4px',
+      marginBottom: '20px'
+    },
+    table: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      tableLayout: 'fixed'
+    },
+    headerCell: {
+      padding: '10px',
+      backgroundColor: '#e74c3c', // Jasny czerwony kolor nagłówka
+      color: 'white',
+      textAlign: 'center',
+      fontWeight: 'bold',
+      borderBottom: '2px solid #c0392b'
+    },
+    cell: {
+      padding: '8px',
+      border: '1px solid #ddd',
+      backgroundColor: 'white'
+    },
+    input: {
+      width: '100%',
+      padding: '8px',
+      border: '1px solid #ddd',
+      borderRadius: '4px',
+      boxSizing: 'border-box'
+    },
+    select: {
+      width: '100%',
+      padding: '8px',
+      border: '1px solid #ddd',
+      borderRadius: '4px',
+      backgroundColor: 'white'
+    }
+  };
+
+  // Funkcja do aktualizacji danych strefy
+  const updateZoneData = (index, field, value) => {
+    const updatedZones = [...zones];
+    updatedZones[index] = {
+      ...updatedZones[index],
+      [field]: value
+    };
+    onChange(updatedZones);
+  };
+
+  return (
+    <div style={tableStyles.container}>
+      <table style={tableStyles.table}>
+        <thead>
+          <tr>
+            <th style={{ ...tableStyles.headerCell, width: '80px' }}>Strefa</th>
+            <th style={{ ...tableStyles.headerCell, width: '200px' }}>Produkt</th>
+            <th style={{ ...tableStyles.headerCell, width: '100px' }}>Stężenie (%)</th>
+            <th style={{ ...tableStyles.headerCell, width: '120px' }}>Przewodność (μS/cm)</th>
+            <th style={{ ...tableStyles.headerCell, width: '120px' }}>Temperatura (°C)</th>
+            <th style={{ ...tableStyles.headerCell, width: '80px' }}>pH</th>
+          </tr>
+        </thead>
+        <tbody>
+          {zones.map((zone, index) => (
+            <tr key={index}>
+              <td style={tableStyles.cell}>Strefa {index + 1}</td>
+              <td style={tableStyles.cell}>
+                <select
+                  style={tableStyles.select}
+                  value={zone.product || ''}
+                  onChange={(e) => updateZoneData(index, 'product', e.target.value)}
+                >
+                  <option value="">Wybierz produkt</option>
+                  <option value="woda_sieciowa">Woda sieciowa</option>
+                  <option value="woda_demi">Woda DEMI</option>
+                  <option value="płukanie wodą sieciową">Płukanie wodą sieciową</option>
+                  <option value="płukanie wodą demineralizowaną">Płukanie wodą demineralizowaną</option>
+                  {products.map(product => (
+                    <option key={product.id} value={product.name}>{product.name}</option>
+                  ))}
+                </select>
+              </td>
+              <td style={tableStyles.cell}>
+                <input
+                  type="number"
+                  style={tableStyles.input}
+                  value={zone.concentration || ''}
+                  onChange={(e) => updateZoneData(index, 'concentration', e.target.value)}
+                  placeholder="0.0"
+                  step="0.1"
+                />
+              </td>
+              <td style={tableStyles.cell}>
+                <input
+                  type="number"
+                  style={tableStyles.input}
+                  value={zone.conductivity || ''}
+                  onChange={(e) => updateZoneData(index, 'conductivity', e.target.value)}
+                  placeholder="0"
+                />
+              </td>
+              <td style={tableStyles.cell}>
+                <input
+                  type="number"
+                  style={tableStyles.input}
+                  value={zone.temperature || ''}
+                  onChange={(e) => updateZoneData(index, 'temperature', e.target.value)}
+                  placeholder="0"
+                  step="0.1"
+                />
+              </td>
+              <td style={tableStyles.cell}>
+                <input
+                  type="number"
+                  style={tableStyles.input}
+                  value={zone.ph || ''}
+                  onChange={(e) => updateZoneData(index, 'ph', e.target.value)}
+                  placeholder="0.0"
+                  step="0.01"
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Komponent notatek klienta
+function ClientNotes({ clientId, salesRepId }) {
+  const [notes, setNotes] = useState([]);
+  const [newNote, setNewNote] = useState('');
+  const [editingNote, setEditingNote] = useState(null);
+  const [expandedNotes, setExpandedNotes] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Pobierz notatki klienta
+  const fetchNotes = useCallback(async () => {
+    if (!clientId) return;
+    
+    setIsLoading(true);
+    try {
+      // Użyj poprawnej kolekcji i zapytania
+      const q = query(
+        collection(db, "notes"), 
+        where("clientId", "==", clientId),
+        orderBy("createdAt", "desc")
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const notesData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt ? new Date(doc.data().createdAt) : new Date(),
+        updatedAt: doc.data().updatedAt ? new Date(doc.data().updatedAt) : null
+      }));
+      
+      setNotes(notesData);
+    } catch (error) {
+      console.error("Błąd podczas pobierania notatek:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [clientId]);
+
+  // Efekt przy zmianie klienta
+  useEffect(() => {
+    fetchNotes();
+  }, [clientId, fetchNotes]);
+
+  // Dodaj nową notatkę
+  const addNote = async () => {
+    if (!newNote.trim() || !clientId) return;
+    
+    try {
+      // Dodaj notatkę do kolekcji notes w Firestore
+      await addDoc(collection(db, "notes"), {
+        clientId,
+        salesRepId,
+        content: newNote,
+        createdAt: new Date().toISOString(),
+        updatedAt: null
+      });
+      
+      setNewNote('');
+      fetchNotes(); // Odśwież listę notatek
+    } catch (error) {
+      console.error("Błąd podczas dodawania notatki:", error);
+      alert("Wystąpił błąd podczas dodawania notatki. Spróbuj ponownie.");
+    }
+  };
+
+  // Aktualizuj notatkę
+  const updateNote = async () => {
+    if (!editingNote || !editingNote.content.trim()) return;
+    
+    try {
+      const noteRef = doc(db, "notes", editingNote.id);
+      await updateDoc(noteRef, {
+        content: editingNote.content,
+        updatedAt: new Date().toISOString()
+      });
+      
+      setEditingNote(null);
+      fetchNotes(); // Odśwież listę notatek
+    } catch (error) {
+      console.error("Błąd podczas aktualizacji notatki:", error);
+      alert("Wystąpił błąd podczas aktualizacji notatki. Spróbuj ponownie.");
+    }
+  };
+
+  // Usuń notatkę
+  const deleteNote = async (noteId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
+    
+    try {
+      await deleteDoc(doc(db, "notes", noteId));
+      fetchNotes(); // Odśwież listę notatek
+    } catch (error) {
+      console.error("Błąd podczas usuwania notatki:", error);
+      alert("Wystąpił błąd podczas usuwania notatki. Spróbuj ponownie.");
+    }
+  };
+
+  // Przełącz rozwinięcie notatki
+  const toggleNoteExpand = (noteId) => {
+    setExpandedNotes(prev => ({
+      ...prev,
+      [noteId]: !prev[noteId]
+    }));
+  };
+
+  // Formatuj datę
+  const formatNoteDate = (date) => {
+    if (!date) return '';
+    return date.toLocaleDateString('pl-PL', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  return (
+    <div className="notes-container mt-6">
+      <h4 className="notes-header text-xl font-bold mb-4">Notatki</h4>
+      
+      <div className="add-note-form mb-6">
+        <textarea
+          className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
+          placeholder="Dodaj nową notatkę..."
+          value={newNote}
+          onChange={(e) => setNewNote(e.target.value)}
+          rows={3}
+        ></textarea>
+        <button
+          className="btn btn-primary"
+          onClick={addNote}
+          disabled={!newNote.trim()}
+        >
+          Dodaj notatkę
+        </button>
+      </div>
+      
+      {isLoading ? (
+        <div className="notes-loading p-4 text-center text-gray-500">Ładowanie notatek...</div>
+      ) : notes.length === 0 ? (
+        <div className="no-notes p-4 text-center text-gray-500">Brak notatek dla tego klienta</div>
+      ) : (
+        <div className="notes-list">
+          {notes.map(note => (
+            <div key={note.id} className="note-item bg-white p-4 rounded shadow mb-4 break-words">
+              {editingNote && editingNote.id === note.id ? (
+                <div className="edit-note-form">
+                  <textarea
+                    className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
+                    value={editingNote.content}
+                    onChange={(e) => setEditingNote({...editingNote, content: e.target.value})}
+                    rows={4}
+                  ></textarea>
+                  <div className="note-actions flex justify-between">
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setEditingNote(null)}
+                    >
+                      Anuluj
+                    </button>
+                    <button 
+                      className="btn btn-primary btn-sm"
+                      onClick={updateNote}
+                      disabled={!editingNote.content.trim()}
+                    >
+                      Zapisz zmiany
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="note-header flex justify-between mb-2">
+                    <span className="note-date text-gray-600 text-sm">
+                      {formatNoteDate(note.createdAt)}
+                      {note.updatedAt && 
+                        <span className="note-updated"> (edytowano: {formatNoteDate(note.updatedAt)})</span>
+                      }
+                    </span>
+                    <div className="note-actions">
+                      <button 
+                        className="btn btn-secondary btn-sm mr-2"
+                        onClick={() => setEditingNote(note)}
+                      >
+                        Edytuj
+                      </button>
+                      <button 
+                        className="btn btn-danger btn-sm"
+                        onClick={() => deleteNote(note.id)}
+                      >
+                        Usuń
+                      </button>
+                    </div>
+                  </div>
+                  <div className="note-content">
+                    {note.content.length > 200 && !expandedNotes[note.id] ? (
+                      <>
+                        <p>{note.content.substring(0, 200)}...</p>
+                        <button 
+                          className="text-blue-500 text-sm mt-2"
+                          onClick={() => toggleNoteExpand(note.id)}
+                        >
+                          Pokaż więcej
+                        </button>
+                      </>
+                    ) : note.content.length > 200 ? (
+                      <>
+                        <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
+                        <button 
+                          className="text-blue-500 text-sm mt-2"
+                          onClick={() => toggleNoteExpand(note.id)}
+                        >
+                          Pokaż mniej
+                        </button>
+                      </>
+                    ) : (
+                      <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Ekran logowania
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
   const [credentials, setCredentials] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -511,7 +1491,7 @@ function LoginScreen({ onLogin }) {
       <div className="login-box">
         <div className="login-header">
           <h1>Haug Chemie®Polska HelpDesk</h1>
-          <img src="https://i.ibb.co/fYhLC13J/Projekt-bez-nazwy-16.png00" alt="Logo" className="login-logo" />
+          <img src="https://i.ibb.co/fYhLC13/Projekt-bez-nazwy-16.png" alt="Logo" className="login-logo" />
         </div>
         
         <div className="login-form">
@@ -846,234 +1826,6 @@ function ConcentrationCalculator({ products }) {
       {result && result.error && (
         <div className="result-tile error">
           <p className="result-label">{result.error}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Komponent notatek klienta
-function ClientNotes({ clientId, salesRepId }) {
-  const [notes, setNotes] = useState([]);
-  const [newNote, setNewNote] = useState('');
-  const [editingNote, setEditingNote] = useState(null);
-  const [expandedNotes, setExpandedNotes] = useState({});
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Pobierz notatki klienta
-  const fetchNotes = useCallback(async () => {
-    if (!clientId) return;
-    
-    setIsLoading(true);
-    try {
-      // Użyj poprawnej kolekcji i zapytania
-      const q = query(
-        collection(db, "notes"), 
-        where("clientId", "==", clientId),
-        orderBy("createdAt", "desc")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const notesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt ? new Date(doc.data().createdAt) : new Date(),
-        updatedAt: doc.data().updatedAt ? new Date(doc.data().updatedAt) : null
-      }));
-      
-      setNotes(notesData);
-    } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clientId]);
-
-  // Efekt przy zmianie klienta
-  useEffect(() => {
-    fetchNotes();
-  }, [clientId, fetchNotes]);
-
-  // Dodaj nową notatkę
-  const addNote = async () => {
-    if (!newNote.trim() || !clientId) return;
-    
-    try {
-      // Dodaj notatkę do kolekcji notes w Firestore
-      await addDoc(collection(db, "notes"), {
-        clientId,
-        salesRepId,
-        content: newNote,
-        createdAt: new Date().toISOString(),
-        updatedAt: null
-      });
-      
-      setNewNote('');
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas dodawania notatki:", error);
-      alert("Wystąpił błąd podczas dodawania notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Aktualizuj notatkę
-  const updateNote = async () => {
-    if (!editingNote || !editingNote.content.trim()) return;
-    
-    try {
-      const noteRef = doc(db, "notes", editingNote.id);
-      await updateDoc(noteRef, {
-        content: editingNote.content,
-        updatedAt: new Date().toISOString()
-      });
-      
-      setEditingNote(null);
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas aktualizacji notatki:", error);
-      alert("Wystąpił błąd podczas aktualizacji notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Usuń notatkę
-  const deleteNote = async (noteId) => {
-    if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
-    
-    try {
-      await deleteDoc(doc(db, "notes", noteId));
-      fetchNotes(); // Odśwież listę notatek
-    } catch (error) {
-      console.error("Błąd podczas usuwania notatki:", error);
-      alert("Wystąpił błąd podczas usuwania notatki. Spróbuj ponownie.");
-    }
-  };
-
-  // Przełącz rozwinięcie notatki
-  const toggleNoteExpand = (noteId) => {
-    setExpandedNotes(prev => ({
-      ...prev,
-      [noteId]: !prev[noteId]
-    }));
-  };
-
-  // Formatuj datę
-  const formatNoteDate = (date) => {
-    if (!date) return '';
-    return date.toLocaleDateString('pl-PL', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  return (
-    <div className="notes-container mt-6">
-      <h4 className="notes-header text-xl font-bold mb-4">Notatki</h4>
-      
-      <div className="add-note-form mb-6">
-        <textarea
-          className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
-          placeholder="Dodaj nową notatkę..."
-          value={newNote}
-          onChange={(e) => setNewNote(e.target.value)}
-          rows={3}
-        ></textarea>
-        <button
-          className="btn btn-primary"
-          onClick={addNote}
-          disabled={!newNote.trim()}
-        >
-          Dodaj notatkę
-        </button>
-      </div>
-      
-      {isLoading ? (
-        <div className="notes-loading p-4 text-center text-gray-500">Ładowanie notatek...</div>
-      ) : notes.length === 0 ? (
-        <div className="no-notes p-4 text-center text-gray-500">Brak notatek dla tego klienta</div>
-      ) : (
-        <div className="notes-list">
-          {notes.map(note => (
-            <div key={note.id} className="note-item bg-white p-4 rounded shadow mb-4 break-words">
-              {editingNote && editingNote.id === note.id ? (
-                <div className="edit-note-form">
-                  <textarea
-                    className="note-textarea w-full p-3 border border-gray-300 rounded mb-2"
-                    value={editingNote.content}
-                    onChange={(e) => setEditingNote({...editingNote, content: e.target.value})}
-                    rows={4}
-                  ></textarea>
-                  <div className="note-actions flex justify-between">
-                    <button 
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setEditingNote(null)}
-                    >
-                      Anuluj
-                    </button>
-                    <button 
-                      className="btn btn-primary btn-sm"
-                      onClick={updateNote}
-                      disabled={!editingNote.content.trim()}
-                    >
-                      Zapisz zmiany
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="note-header flex justify-between mb-2">
-                    <span className="note-date text-gray-600 text-sm">
-                      {formatNoteDate(note.createdAt)}
-                      {note.updatedAt && 
-                        <span className="note-updated"> (edytowano: {formatNoteDate(note.updatedAt)})</span>
-                      }
-                    </span>
-                    <div className="note-actions">
-                      <button 
-                        className="btn btn-secondary btn-sm mr-2"
-                        onClick={() => setEditingNote(note)}
-                      >
-                        Edytuj
-                      </button>
-                      <button 
-                        className="btn btn-danger btn-sm"
-                        onClick={() => deleteNote(note.id)}
-                      >
-                        Usuń
-                      </button>
-                    </div>
-                  </div>
-                  <div className="note-content">
-                    {note.content.length > 200 && !expandedNotes[note.id] ? (
-                      <>
-                        <p>{note.content.substring(0, 200)}...</p>
-                        <button 
-                          className="text-blue-500 text-sm mt-2"
-                          onClick={() => toggleNoteExpand(note.id)}
-                        >
-                          Pokaż więcej
-                        </button>
-                      </>
-                    ) : note.content.length > 200 ? (
-                      <>
-                        <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
-                        <button 
-                          className="text-blue-500 text-sm mt-2"
-                          onClick={() => toggleNoteExpand(note.id)}
-                        >
-                          Pokaż mniej
-                        </button>
-                      </>
-                    ) : (
-                      <p style={{whiteSpace: 'pre-wrap'}}>{note.content}</p>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
         </div>
       )}
     </div>
@@ -1424,7 +2176,7 @@ function CoolantSelector() {
   );
 }
 
-// Panel handlowca
+// Panel handlowca z rozszerzonymi funkcjami
 function SalesRepPanel({ currentUser, products }) {
   const [clients, setClients] = useState([]);
   const [filteredClients, setFilteredClients] = useState([]);
@@ -1433,6 +2185,9 @@ function SalesRepPanel({ currentUser, products }) {
   const [notes, setNotes] = useState([]);
   const [newReport, setNewReport] = useState({
     date: new Date().toISOString().split('T')[0],
+    processName: '',
+    researchGoal: 'Kontrola parametrów procesów.',  // Dodany domyślny cel badań
+    summary: '',
     zones: Array(7).fill().map(() => ({
       product: '',
       concentration: '',
@@ -1443,13 +2198,23 @@ function SalesRepPanel({ currentUser, products }) {
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddClientModal, setShowAddClientModal] = useState(false);
-  const [newClientName, setNewClientName] = useState('');
+  const [showEditClientModal, setShowEditClientModal] = useState(false);
+  const [newClientData, setNewClientData] = useState({
+    name: '',
+    address: '',
+    postalCode: '',
+    city: '',
+    email: '',
+    website: '',
+    phone: ''
+  });
+  const [editClientData, setEditClientData] = useState(null);
   const [activeTab, setActiveTab] = useState('reports');
   
-  // Pobierz klientów z Firebase
-  const fetchClients = async () => {
+  // Pobierz klientów z Firebase - używając useCallback
+  const fetchClients = useCallback(async () => {
     try {
-      const q = query(collection(db, "clients"), where("salesRepId", "==", currentUser.id));
+      const q = query(collection(db, "clients"), where("salesRepId", "==", currentUser?.id));
       const querySnapshot = await getDocs(q);
       const clientsData = querySnapshot.docs.map(doc => ({
         id: doc.id,
@@ -1460,10 +2225,10 @@ function SalesRepPanel({ currentUser, products }) {
     } catch (error) {
       console.error("Błąd podczas pobierania klientów:", error);
     }
-  };
+  }, [currentUser?.id]);
           
   // Pobierz raporty dla wybranego klienta
-  const fetchReports = async (clientId) => {
+  const fetchReports = useCallback(async (clientId) => {
     try {
       const q = query(collection(db, "reports"), where("clientId", "==", clientId));
       const querySnapshot = await getDocs(q);
@@ -1479,10 +2244,10 @@ function SalesRepPanel({ currentUser, products }) {
     } catch (error) {
       console.error("Błąd podczas pobierania raportów:", error);
     }
-  };
+  }, []);
 
   // Pobierz notatki dla wybranego klienta
-  const fetchNotes = async (clientId) => {
+  const fetchNotes = useCallback(async (clientId) => {
     try {
       const q = query(
         collection(db, "notes"), 
@@ -1500,14 +2265,14 @@ function SalesRepPanel({ currentUser, products }) {
     } catch (error) {
       console.error("Błąd podczas pobierania notatek:", error);
     }
-  };
+  }, []);
   
   // Efekt przy pierwszym ładowaniu
   useEffect(() => {
     if (currentUser) {
       fetchClients();
     }
-  }, [currentUser]);
+  }, [currentUser, fetchClients]);
   
   // Efekt przy zmianie wybranego klienta
   useEffect(() => {
@@ -1515,7 +2280,7 @@ function SalesRepPanel({ currentUser, products }) {
       fetchReports(selectedClient.id);
       fetchNotes(selectedClient.id);
     }
-  }, [selectedClient]);
+  }, [selectedClient, fetchReports, fetchNotes]);
   
   // Efekt przy zmianie wyszukiwania
   useEffect(() => {
@@ -1530,26 +2295,92 @@ function SalesRepPanel({ currentUser, products }) {
     }
   }, [searchTerm, clients]);
 
-  // Dodaj nowego klienta
+  // Dodaj nowego klienta z pełnymi danymi
   const addClient = async () => {
-    if (newClientName.trim() === '') return;
+    if (newClientData.name.trim() === '') return;
     
     try {
       await addDoc(collection(db, "clients"), {
-        name: newClientName,
+        ...newClientData,
         salesRepId: currentUser.id,
         createdAt: new Date().toISOString()
       });
       
       fetchClients();
-      setNewClientName('');
+      setNewClientData({
+        name: '',
+        address: '',
+        postalCode: '',
+        city: '',
+        email: '',
+        website: '',
+        phone: ''
+      });
       setShowAddClientModal(false);
     } catch (error) {
       console.error("Błąd podczas dodawania klienta:", error);
     }
   };
   
-  // Dodaj nowy raport
+  // Edytuj dane klienta
+  const editClient = async () => {
+    if (!editClientData || editClientData.name.trim() === '') return;
+    
+    try {
+      const clientRef = doc(db, "clients", editClientData.id);
+      await updateDoc(clientRef, {
+        name: editClientData.name,
+        address: editClientData.address,
+        postalCode: editClientData.postalCode,
+        city: editClientData.city,
+        email: editClientData.email,
+        website: editClientData.website,
+        phone: editClientData.phone,
+        updatedAt: new Date().toISOString()
+      });
+      
+      // Odśwież dane klienta
+      fetchClients();
+      if (selectedClient && selectedClient.id === editClientData.id) {
+        setSelectedClient({
+          ...selectedClient,
+          ...editClientData
+        });
+      }
+      
+      setShowEditClientModal(false);
+      setEditClientData(null);
+    } catch (error) {
+      console.error("Błąd podczas edycji klienta:", error);
+    }
+  };
+  
+  // Usuń klienta
+  const deleteClient = async (clientId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć tego klienta? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      // Usuń klienta
+      await deleteDoc(doc(db, "clients", clientId));
+      
+      // Odśwież listę klientów
+      fetchClients();
+      
+      // Jeśli usunięty klient był wybrany, zresetuj wybór
+      if (selectedClient && selectedClient.id === clientId) {
+        setSelectedClient(null);
+        setReports([]);
+        setNotes([]);
+      }
+    } catch (error) {
+      console.error("Błąd podczas usuwania klienta:", error);
+      alert("Wystąpił błąd podczas usuwania klienta");
+    }
+  };
+  
+  // Dodaj nowy raport z podsumowaniem
   const addReport = async () => {
     if (!selectedClient) return;
     
@@ -1567,6 +2398,9 @@ function SalesRepPanel({ currentUser, products }) {
         clientId: selectedClient.id,
         salesRepId: currentUser.id,
         date: newReport.date,
+        processName: newReport.processName,
+        researchGoal: newReport.researchGoal,
+        summary: newReport.summary,
         zones: filledZones,
         createdAt: new Date().toISOString()
       });
@@ -1576,6 +2410,9 @@ function SalesRepPanel({ currentUser, products }) {
       // Resetuj formularz
       setNewReport({
         date: new Date().toISOString().split('T')[0],
+        processName: '',
+        researchGoal: 'Kontrola parametrów procesów.',
+        summary: '',
         zones: Array(7).fill().map(() => ({
           product: '',
           concentration: '',
@@ -1589,25 +2426,51 @@ function SalesRepPanel({ currentUser, products }) {
     }
   };
   
-  // Aktualizuj dane strefy w nowym raporcie
-  const updateZoneData = (index, field, value) => {
-    const updatedZones = [...newReport.zones];
-    updatedZones[index] = {
-      ...updatedZones[index],
-      [field]: value
-    };
+  // Usuń raport
+  const deleteReport = async (reportId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      await deleteDoc(doc(db, "reports", reportId));
+      
+      // Odśwież listę raportów
+      if (selectedClient) {
+        fetchReports(selectedClient.id);
+      }
+    } catch (error) {
+      console.error("Błąd podczas usuwania raportu:", error);
+      alert("Wystąpił błąd podczas usuwania raportu");
+    }
+  };
+  
+  // Aktualizacja danych stref
+  const updateZones = (updatedZones) => {
     setNewReport({
       ...newReport,
       zones: updatedZones
     });
   };
 
-  // Generuj raport PDF
-  const generatePDF = () => {
+  // Generowanie raportów PDF
+  const generatePDF = async () => {
     if (!selectedClient) return;
-    
-    const doc = generateClientReport(selectedClient, reports, notes);
-    doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+    await generateClientReport(selectedClient, reports, notes);
+  };
+  
+  // Generuj raport PDF na firmowym papierze
+  const generateCompanyPDF = async (report) => {
+    if (!selectedClient || !report) return;
+    await generateCompanyReportPDF(selectedClient, report, {
+      username: currentUser.username
+    });
+  };
+  
+  // Generuj standardowy raport PDF
+  const generateSinglePDF = async (report) => {
+    if (!selectedClient || !report) return;
+    await generateSingleReportPDF(selectedClient, report);
   };
   
   return (
@@ -1649,9 +2512,31 @@ function SalesRepPanel({ currentUser, products }) {
                   onClick={() => setSelectedClient(client)}
                 >
                   <h4 className="client-name">{client.name}</h4>
+                  {client.city && <p className="client-city">{client.city}</p>}
                   <p className="client-date">
                     Dodano: {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : 'brak daty'}
                   </p>
+                  <div className="client-actions">
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditClientData(client);
+                        setShowEditClientModal(true);
+                      }}
+                    >
+                      Edytuj
+                    </button>
+                    <button 
+                      className="btn btn-danger btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteClient(client.id);
+                      }}
+                    >
+                      Usuń
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -1662,9 +2547,23 @@ function SalesRepPanel({ currentUser, products }) {
           {selectedClient ? (
             <>
               <div className="flex justify-between items-center mb-4">
-                <h3 className="reports-header text-xl font-bold">
-                  {selectedClient.name}
-                </h3>
+                <div>
+                  <h3 className="reports-header text-xl font-bold">
+                    {selectedClient.name}
+                  </h3>
+                  {selectedClient.address && (
+                    <p className="text-gray-600">{selectedClient.address}</p>
+                  )}
+                  {selectedClient.postalCode && selectedClient.city && (
+                    <p className="text-gray-600">{selectedClient.postalCode} {selectedClient.city}</p>
+                  )}
+                  {selectedClient.email && (
+                    <p className="text-gray-600">Email: {selectedClient.email}</p>
+                  )}
+                  {selectedClient.phone && (
+                    <p className="text-gray-600">Tel: {selectedClient.phone}</p>
+                  )}
+                </div>
                 <button 
                   className="btn btn-primary" 
                   onClick={generatePDF}
@@ -1704,73 +2603,46 @@ function SalesRepPanel({ currentUser, products }) {
                       />
                     </div>
                     
-                    <div className="zones-table overflow-x-auto">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr className="bg-gray-100">
-                            <th className="p-2 border">Strefa</th>
-                            <th className="p-2 border">Produkt</th>
-                            <th className="p-2 border">Stężenie (%)</th>
-                            <th className="p-2 border">Przewodność (μS/cm)</th>
-                            <th className="p-2 border">Temperatura (°C)</th>
-                            <th className="p-2 border">pH</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {newReport.zones.map((zone, index) => (
-                            <tr key={index}>
-                              <td className="p-2 border">Strefa {index + 1}</td>
-                              <td className="p-2 border">
-                                <select
-                                  className="input-field w-full"
-                                  value={zone.product}
-                                  onChange={(e) => updateZoneData(index, 'product', e.target.value)}
-                                >
-                                  <option value="">Wybierz produkt</option>
-                                  <option value="woda_sieciowa">Woda sieciowa</option>
-                                  <option value="woda_demi">Woda DEMI</option>
-                                  {products.map(product => (
-                                    <option key={product.id} value={product.name}>{product.name}</option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.concentration}
-                                  onChange={(e) => updateZoneData(index, 'concentration', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.conductivity}
-                                  onChange={(e) => updateZoneData(index, 'conductivity', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  className="input-field w-full"
-                                  value={zone.temperature}
-                                  onChange={(e) => updateZoneData(index, 'temperature', e.target.value)}
-                                />
-                              </td>
-                              <td className="p-2 border">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  className="input-field w-full"
-                                  value={zone.ph}
-                                  onChange={(e) => updateZoneData(index, 'ph', e.target.value)}
-                                />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="form-row mb-4">
+                      <label className="block mb-1">Nazwa procesu (opcjonalnie)</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        value={newReport.processName}
+                        onChange={(e) => setNewReport({...newReport, processName: e.target.value})}
+                        placeholder="np. Proces przygotowania stali czarnej"
+                      />
+                    </div>
+                    
+                    <div className="form-row mb-4">
+                      <label className="block mb-1">Cel badań</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        value={newReport.researchGoal}
+                        onChange={(e) => setNewReport({...newReport, researchGoal: e.target.value})}
+                        placeholder="Cel badań"
+                      />
+                    </div>
+                    
+                    <div className="form-row mb-4">
+                      <label className="block mb-1">Parametry pracy kąpieli w poszczególnych strefach:</label>
+                      <EnhancedZonesTable 
+                        zones={newReport.zones}
+                        onChange={updateZones}
+                        products={products}
+                      />
+                    </div>
+                    
+                    <div className="form-row mb-4">
+                      <label className="block mb-1">Podsumowanie raportu (opcjonalnie)</label>
+                      <textarea
+                        className="input-field w-full"
+                        rows="4"
+                        value={newReport.summary}
+                        onChange={(e) => setNewReport({...newReport, summary: e.target.value})}
+                        placeholder="Wprowadź podsumowanie, np. uwagi dotyczące stanu kąpieli, zalecenia..."
+                      ></textarea>
                     </div>
                     
                     <div className="form-actions mt-4">
@@ -1794,17 +2666,37 @@ function SalesRepPanel({ currentUser, products }) {
                             <div className="report-header mb-3 flex justify-between items-center">
                               <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
                               
-                              {/* Przycisk do generowania PDF dla pojedynczego raportu */}
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => {
-                                  const doc = generateSingleReportPDF(selectedClient, report);
-                                  doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date(report.date).toISOString().split('T')[0]}.pdf`);
-                                }}
-                              >
-                                Generuj PDF
-                              </button>
+                              {/* Przyciski do generowania PDF i usuwania raportu */}
+                              <div className="flex space-x-2">
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => generateSinglePDF(report)}
+                                >
+                                  Generuj PDF
+                                </button>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => generateCompanyPDF(report)}
+                                >
+                                  Generuj raport firmowy
+                                </button>
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  onClick={() => deleteReport(report.id)}
+                                >
+                                  Usuń
+                                </button>
+                              </div>
                             </div>
+                            
+                            {report.processName && (
+                              <p className="mb-2"><strong>Proces:</strong> {report.processName}</p>
+                            )}
+                            
+                            {report.researchGoal && (
+                              <p className="mb-2"><strong>Cel badań:</strong> {report.researchGoal}</p>
+                            )}
+                            
                             <div className="table-container overflow-x-auto">
                               <table className="data-table w-full border-collapse">
                                 <thead>
@@ -1831,6 +2723,13 @@ function SalesRepPanel({ currentUser, products }) {
                                 </tbody>
                               </table>
                             </div>
+                            
+                            {report.summary && (
+                              <div className="mt-3">
+                                <strong>Podsumowanie:</strong>
+                                <p className="mt-1">{report.summary}</p>
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1854,19 +2753,89 @@ function SalesRepPanel({ currentUser, products }) {
         </div>
       </div>
       
+      {/* Modal dodawania klienta z rozszerzonymi polami */}
       {showAddClientModal && (
         <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
             <h3 className="modal-title text-xl font-bold mb-4">Dodaj nowego klienta</h3>
             <div className="modal-form mb-4">
-              <label className="block mb-2">Nazwa klienta</label>
-              <input
-                type="text"
-                className="input-field w-full"
-                value={newClientName}
-                onChange={(e) => setNewClientName(e.target.value)}
-                placeholder="Podaj nazwę klienta"
-              />
+              <div className="mb-3">
+                <label className="block mb-1">Nazwa klienta</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={newClientData.name}
+                  onChange={(e) => setNewClientData({...newClientData, name: e.target.value})}
+                  placeholder="Podaj nazwę klienta"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Adres</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={newClientData.address}
+                  onChange={(e) => setNewClientData({...newClientData, address: e.target.value})}
+                  placeholder="Podaj adres"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div>
+                  <label className="block mb-1">Kod pocztowy</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={newClientData.postalCode}
+                    onChange={(e) => setNewClientData({...newClientData, postalCode: e.target.value})}
+                    placeholder="Kod pocztowy"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-1">Miejscowość</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={newClientData.city}
+                    onChange={(e) => setNewClientData({...newClientData, city: e.target.value})}
+                    placeholder="Miejscowość"
+                  />
+                </div>
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Email</label>
+                <input
+                  type="email"
+                  className="input-field w-full"
+                  value={newClientData.email}
+                  onChange={(e) => setNewClientData({...newClientData, email: e.target.value})}
+                  placeholder="Adres email"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Strona WWW</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={newClientData.website}
+                  onChange={(e) => setNewClientData({...newClientData, website: e.target.value})}
+                  placeholder="Strona www"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Telefon</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={newClientData.phone}
+                  onChange={(e) => setNewClientData({...newClientData, phone: e.target.value})}
+                  placeholder="Numer telefonu"
+                />
+              </div>
             </div>
             <div className="modal-actions flex justify-end space-x-2">
               <button
@@ -1884,6 +2853,334 @@ function SalesRepPanel({ currentUser, products }) {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* Modal edycji klienta */}
+      {showEditClientModal && editClientData && (
+        <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
+            <h3 className="modal-title text-xl font-bold mb-4">Edytuj klienta</h3>
+            <div className="modal-form mb-4">
+              <div className="mb-3">
+                <label className="block mb-1">Nazwa klienta</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.name}
+                  onChange={(e) => setEditClientData({...editClientData, name: e.target.value})}
+                  placeholder="Podaj nazwę klienta"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Adres</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.address || ''}
+                  onChange={(e) => setEditClientData({...editClientData, address: e.target.value})}
+                  placeholder="Podaj adres"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div>
+                  <label className="block mb-1">Kod pocztowy</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={editClientData.postalCode || ''}
+                    onChange={(e) => setEditClientData({...editClientData, postalCode: e.target.value})}
+                    placeholder="Kod pocztowy"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-1">Miejscowość</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={editClientData.city || ''}
+                    onChange={(e) => setEditClientData({...editClientData, city: e.target.value})}
+                    placeholder="Miejscowość"
+                  />
+                </div>
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Email</label>
+                <input
+                  type="email"
+                  className="input-field w-full"
+                  value={editClientData.email || ''}
+                  onChange={(e) => setEditClientData({...editClientData, email: e.target.value})}
+                  placeholder="Adres email"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Strona WWW</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.website || ''}
+                  onChange={(e) => setEditClientData({...editClientData, website: e.target.value})}
+                  placeholder="Strona www"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Telefon</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.phone || ''}
+                  onChange={(e) => setEditClientData({...editClientData, phone: e.target.value})}
+                  placeholder="Numer telefonu"
+                />
+              </div>
+            </div>
+            <div className="modal-actions flex justify-end space-x-2">
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setShowEditClientModal(false);
+                  setEditClientData(null);
+                }}
+              >
+                Anuluj
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={editClient}
+              >
+                Zapisz zmiany
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Komponent zarządzania raportami dla administratora
+function ReportsManagement() {
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [clientsMap, setClientsMap] = useState({});
+  const [salesRepsMap, setSalesRepsMap] = useState({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState({ startDate: '', endDate: '' });
+  const [currentPage, setCurrentPage] = useState(1);
+  const reportsPerPage = 10;
+  
+  // Pobierz wszystkie raporty z systemu
+  const fetchAllReports = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      // Pobierz wszystkich klientów, aby uzyskać mapę id->nazwa
+      const clientsSnapshot = await getDocs(collection(db, "clients"));
+      const clientsData = {};
+      clientsSnapshot.docs.forEach(doc => {
+        clientsData[doc.id] = doc.data().name;
+      });
+      setClientsMap(clientsData);
+      
+      // Pobierz wszystkich handlowców, aby uzyskać mapę id->nazwa
+      const salesRepsSnapshot = await getDocs(collection(db, "users"));
+      const salesRepsData = {};
+      salesRepsSnapshot.docs.forEach(doc => {
+        salesRepsData[doc.id] = doc.data().username;
+      });
+      setSalesRepsMap(salesRepsData);
+      
+      // Pobierz wszystkie raporty, posortowane od najnowszego
+      const q = query(
+        collection(db, "reports"),
+        orderBy("date", "desc")
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const reportsData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        clientName: clientsData[doc.data().clientId] || "Nieznany klient",
+        salesRepName: salesRepsData[doc.data().salesRepId] || "Nieznany handlowiec"
+      }));
+      
+      setReports(reportsData);
+    } catch (error) {
+      console.error("Błąd podczas pobierania raportów:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+  
+  // Efekt przy ładowaniu komponentu
+  useEffect(() => {
+    fetchAllReports();
+  }, [fetchAllReports]);
+  
+  // Funkcja do filtrowania raportów
+  const getFilteredReports = useCallback(() => {
+    return reports.filter(report => {
+      // Filtrowanie po wyszukiwanym tekście
+      const matchesSearch = searchTerm.trim() === '' || 
+        report.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        report.salesRepName.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Filtrowanie po zakresie dat
+      let matchesDate = true;
+      if (dateFilter.startDate) {
+        matchesDate = matchesDate && new Date(report.date) >= new Date(dateFilter.startDate);
+      }
+      if (dateFilter.endDate) {
+        matchesDate = matchesDate && new Date(report.date) <= new Date(dateFilter.endDate);
+      }
+      
+      return matchesSearch && matchesDate;
+    });
+  }, [reports, searchTerm, dateFilter]);
+  
+  // Pobranie odfiltrowanych i posortowanych raportów
+  const filteredReports = getFilteredReports();
+  
+  // Wyliczenie aktualnej strony raportów (paginacja)
+  const indexOfLastReport = currentPage * reportsPerPage;
+  const indexOfFirstReport = indexOfLastReport - reportsPerPage;
+  const currentReports = filteredReports.slice(indexOfFirstReport, indexOfLastReport);
+  const totalPages = Math.ceil(filteredReports.length / reportsPerPage);
+  
+  // Zmiana strony
+  const paginate = (pageNumber) => setCurrentPage(pageNumber);
+  
+  // Usuń raport
+  const deleteReport = async (reportId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      await deleteDoc(doc(db, "reports", reportId));
+      fetchAllReports(); // Odśwież listę raportów
+    } catch (error) {
+      console.error("Błąd podczas usuwania raportu:", error);
+      alert("Wystąpił błąd podczas usuwania raportu");
+    }
+  };
+  
+  return (
+    <div className="tile">
+      <div className="tile-header">
+        <h2 className="tile-title">Zarządzanie Raportami</h2>
+      </div>
+      
+      {/* Filtry */}
+      <div className="filters-container mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="block mb-1">Wyszukaj</label>
+          <input
+            type="text"
+            className="input-field w-full"
+            placeholder="Wyszukaj po nazwie klienta lub handlowca..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        
+        <div>
+          <label className="block mb-1">Data od</label>
+          <input
+            type="date"
+            className="input-field w-full"
+            value={dateFilter.startDate}
+            onChange={(e) => setDateFilter({...dateFilter, startDate: e.target.value})}
+          />
+        </div>
+        
+        <div>
+          <label className="block mb-1">Data do</label>
+          <input
+            type="date"
+            className="input-field w-full"
+            value={dateFilter.endDate}
+            onChange={(e) => setDateFilter({...dateFilter, endDate: e.target.value})}
+          />
+        </div>
+      </div>
+      
+      {isLoading ? (
+        <div className="loading-container p-8 text-center">
+          <p>Ładowanie raportów...</p>
+        </div>
+      ) : filteredReports.length === 0 ? (
+        <div className="no-reports p-8 text-center">
+          <p>Brak raportów spełniających kryteria wyszukiwania</p>
+        </div>
+      ) : (
+        <>
+          <div className="reports-list overflow-x-auto">
+            <table className="data-table w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="p-3 border">Nr raportu</th>
+                  <th className="p-3 border">Data</th>
+                  <th className="p-3 border">Klient</th>
+                  <th className="p-3 border">Handlowiec</th>
+                  <th className="p-3 border">Proces</th>
+                  <th className="p-3 border">Cel badań</th>
+                  <th className="p-3 border">Akcje</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentReports.map((report, index) => {
+                  const reportDate = new Date(report.date);
+                  const reportYear = reportDate.getFullYear();
+                  // Wyliczamy numer raportu (index + 1 w aktualnym roku)
+                  const reportNumber = `${index + 1 + (currentPage - 1) * reportsPerPage}/ANL/${reportYear}`;
+                  
+                  return (
+                    <tr key={report.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="p-3 border text-center font-semibold">{reportNumber}</td>
+                      <td className="p-3 border">{new Date(report.date).toLocaleDateString('pl-PL')}</td>
+                      <td className="p-3 border">{report.clientName}</td>
+                      <td className="p-3 border">{report.salesRepName}</td>
+                      <td className="p-3 border">{report.processName || '-'}</td>
+                      <td className="p-3 border">{report.researchGoal || 'Kontrola parametrów procesów.'}</td>
+                      <td className="p-3 border">
+                        <div className="flex justify-center space-x-2">
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => deleteReport(report.id)}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Paginacja */}
+          {totalPages > 1 && (
+            <div className="pagination mt-6 flex justify-center">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNumber => (
+                <button
+                  key={pageNumber}
+                  className={`pagination-item mx-1 px-3 py-1 border ${
+                    currentPage === pageNumber ? 'bg-blue-500 text-white' : 'bg-white'
+                  }`}
+                  onClick={() => paginate(pageNumber)}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1903,7 +3200,7 @@ function UserManagement() {
   const [editingUser, setEditingUser] = useState(null);
   
   // Pobierz użytkowników z Firestore
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "users"));
       const usersData = querySnapshot.docs.map(doc => ({
@@ -1916,7 +3213,7 @@ function UserManagement() {
       console.error("Błąd podczas pobierania użytkowników:", error);
       setUsers([]);
     }
-  };
+  }, []);
   
   // Dodaj nowego użytkownika
   const addUser = async () => {
@@ -2007,7 +3304,7 @@ function UserManagement() {
   // Efekt przy pierwszym ładowaniu
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [fetchUsers]);
   
   return (
     <div className="tile">
@@ -2067,44 +3364,44 @@ function UserManagement() {
       </div>
       
       {showAddUserModal && (
-        <div className="modal">
-          <div className="modal-content">
-            <h3 className="modal-title">Dodaj nowego użytkownika</h3>
-            <div className="modal-form">
-              <div className="form-row">
-                <label>Nazwa użytkownika</label>
+        <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
+            <h3 className="modal-title text-xl font-bold mb-4">Dodaj nowego użytkownika</h3>
+            <div className="modal-form mb-4">
+              <div className="mb-3">
+                <label className="block mb-1">Nazwa użytkownika</label>
                 <input
                   type="text"
-                  className="input-field"
+                  className="input-field w-full"
                   value={newUser.username}
                   onChange={(e) => setNewUser({...newUser, username: e.target.value})}
                   placeholder="Podaj nazwę użytkownika"
                 />
               </div>
-              <div className="form-row">
-                <label>Email</label>
+              <div className="mb-3">
+                <label className="block mb-1">Email</label>
                 <input
                   type="email"
-                  className="input-field"
+                  className="input-field w-full"
                   value={newUser.email}
                   onChange={(e) => setNewUser({...newUser, email: e.target.value})}
                   placeholder="Podaj adres email"
                 />
               </div>
-              <div className="form-row">
-                <label>Hasło</label>
+              <div className="mb-3">
+                <label className="block mb-1">Hasło</label>
                 <input
                   type="password"
-                  className="input-field"
+                  className="input-field w-full"
                   value={newUser.password}
                   onChange={(e) => setNewUser({...newUser, password: e.target.value})}
                   placeholder="Podaj hasło"
                 />
               </div>
-              <div className="form-row">
-                <label>Rola</label>
+              <div className="mb-3">
+                <label className="block mb-1">Rola</label>
                 <select
-                  className="input-field"
+                  className="input-field w-full"
                   value={newUser.role}
                   onChange={(e) => setNewUser({...newUser, role: e.target.value})}
                 >
@@ -2113,7 +3410,7 @@ function UserManagement() {
                 </select>
               </div>
             </div>
-            <div className="modal-actions">
+            <div className="modal-actions flex justify-end space-x-2">
               <button
                 className="btn btn-secondary"
                 onClick={() => setShowAddUserModal(false)}
@@ -2132,33 +3429,33 @@ function UserManagement() {
       )}
       
       {showEditUserModal && editingUser && (
-        <div className="modal">
-          <div className="modal-content">
-            <h3 className="modal-title">Edytuj użytkownika</h3>
-            <div className="modal-form">
-              <div className="form-row">
-                <label>Nazwa użytkownika</label>
+        <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
+            <h3 className="modal-title text-xl font-bold mb-4">Edytuj użytkownika</h3>
+            <div className="modal-form mb-4">
+              <div className="mb-3">
+                <label className="block mb-1">Nazwa użytkownika</label>
                 <input
                   type="text"
-                  className="input-field"
+                  className="input-field w-full"
                   value={editingUser.username}
                   onChange={(e) => setEditingUser({...editingUser, username: e.target.value})}
                   placeholder="Podaj nazwę użytkownika"
                 />
               </div>
-              <div className="form-row">
-                <label>Email (nie można zmienić)</label>
+              <div className="mb-3">
+                <label className="block mb-1">Email (nie można zmienić)</label>
                 <input
                   type="email"
-                  className="input-field"
+                  className="input-field w-full"
                   value={editingUser.email}
                   disabled
                 />
               </div>
-              <div className="form-row">
-                <label>Rola</label>
+              <div className="mb-3">
+                <label className="block mb-1">Rola</label>
                 <select
-                  className="input-field"
+                  className="input-field w-full"
                   value={editingUser.role}
                   onChange={(e) => setEditingUser({...editingUser, role: e.target.value})}
                 >
@@ -2167,7 +3464,7 @@ function UserManagement() {
                 </select>
               </div>
             </div>
-            <div className="modal-actions">
+            <div className="modal-actions flex justify-end space-x-2">
               <button
                 className="btn btn-secondary"
                 onClick={() => {
@@ -2260,79 +3557,88 @@ function ProductManagement({ fetchProducts, products }) {
         <h2 className="tile-title">Zarządzanie Produktami</h2>
       </div>
       
-      <div className="product-form">
-        <div className="form-row">
-          <input
-            type="text"
-            placeholder="Nazwa produktu"
-            className="input-field"
-            value={newProduct.name}
-            onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
-          />
-        </div>
-        
-        <div className="form-row">
-          <input
-            type="number"
-            placeholder="Zużycie g/m²"
-            className="input-field"
-            value={newProduct.consumption || ''}
-            onChange={(e) => setNewProduct({...newProduct, consumption: parseFloat(e.target.value)})}
-          />
-        </div>
-        
-        <div className="form-row">
-          <button 
-            className="btn btn-primary"
-            onClick={addProduct}
-          >
-            Dodaj produkt
-          </button>
+      <div className="product-form mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block mb-1">Nazwa produktu</label>
+            <input
+              type="text"
+              placeholder="Nazwa produktu"
+              className="input-field w-full"
+              value={newProduct.name}
+              onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
+            />
+          </div>
+          
+          <div>
+            <label className="block mb-1">Zużycie g/m²</label>
+            <input
+              type="number"
+              placeholder="Zużycie g/m²"
+              className="input-field w-full"
+              value={newProduct.consumption || ''}
+              onChange={(e) => setNewProduct({...newProduct, consumption: parseFloat(e.target.value)})}
+            />
+          </div>
+          
+          <div className="flex items-end">
+            <button 
+              className="btn btn-primary w-full"
+              onClick={addProduct}
+              disabled={!newProduct.name || !newProduct.consumption}
+            >
+              Dodaj produkt
+            </button>
+          </div>
         </div>
       </div>
       
       {editingProduct && (
-        <div className="edit-product-form">
-          <h4>Edytuj produkt</h4>
-          <div className="form-row">
-            <input
-              type="text"
-              placeholder="Nazwa produktu"
-              className="input-field"
-              value={editingProduct.name}
-              onChange={(e) => setEditingProduct({...editingProduct, name: e.target.value})}
-            />
-          </div>
-          
-          <div className="form-row">
-            <input
-              type="number"
-              placeholder="Zużycie g/m²"
-              className="input-field"
-              value={editingProduct.consumption || ''}
-              onChange={(e) => setEditingProduct({...editingProduct, consumption: parseFloat(e.target.value)})}
-            />
-          </div>
-          
-          <div className="form-actions">
-            <button 
-              className="btn btn-primary"
-              onClick={updateProduct}
-            >
-              Zapisz zmiany
-            </button>
-            <button 
-              className="btn btn-secondary"
-              onClick={() => setEditingProduct(null)}
-            >
-              Anuluj
-            </button>
+        <div className="edit-product-form mb-6 p-4 bg-gray-100 rounded">
+          <h4 className="font-bold mb-3">Edytuj produkt</h4>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block mb-1">Nazwa produktu</label>
+              <input
+                type="text"
+                placeholder="Nazwa produktu"
+                className="input-field w-full"
+                value={editingProduct.name}
+                onChange={(e) => setEditingProduct({...editingProduct, name: e.target.value})}
+              />
+            </div>
+            
+            <div>
+              <label className="block mb-1">Zużycie g/m²</label>
+              <input
+                type="number"
+                placeholder="Zużycie g/m²"
+                className="input-field w-full"
+                value={editingProduct.consumption || ''}
+                onChange={(e) => setEditingProduct({...editingProduct, consumption: parseFloat(e.target.value)})}
+              />
+            </div>
+            
+            <div className="flex items-end space-x-2">
+              <button 
+                className="btn btn-primary flex-1"
+                onClick={updateProduct}
+              >
+                Zapisz zmiany
+              </button>
+              <button 
+                className="btn btn-secondary"
+                onClick={() => setEditingProduct(null)}
+              >
+                Anuluj
+              </button>
+            </div>
           </div>
         </div>
       )}
       
-      <div className="table-container">
-        <table className="data-table">
+      <div className="table-container overflow-x-auto">
+        <table className="data-table w-full">
           <thead>
             <tr>
               <th>Nazwa Produktu</th>
@@ -2347,7 +3653,7 @@ function ProductManagement({ fetchProducts, products }) {
                 <td className="text-center">{product.consumption}</td>
                 <td>
                   <button 
-                    className="btn btn-secondary btn-sm"
+                    className="btn btn-secondary btn-sm mr-2"
                     onClick={() => setEditingProduct(product)}
                   >
                     Edytuj
@@ -2373,13 +3679,14 @@ function ClientManagement() {
   const [clients, setClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
   const [reports, setReports] = useState([]);
-  const [notes, setNotes] = useState([]);
   const [salesReps, setSalesReps] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('reports');
+  const [showEditClientModal, setShowEditClientModal] = useState(false);
+  const [editClientData, setEditClientData] = useState(null);
   
   // Pobierz wszystkich klientów
-  const fetchAllClients = async () => {
+  const fetchAllClients = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "clients"));
       const clientsData = querySnapshot.docs.map(doc => ({
@@ -2392,10 +3699,10 @@ function ClientManagement() {
       console.error("Błąd podczas pobierania klientów:", error);
       setClients([]);
     }
-  };
+  }, []);
   
   // Pobierz handlowców
-  const fetchSalesReps = async () => {
+  const fetchSalesReps = useCallback(async () => {
     try {
       const q = query(collection(db, "users"), where("role", "==", "salesRep"));
       const querySnapshot = await getDocs(q);
@@ -2409,10 +3716,10 @@ function ClientManagement() {
       console.error("Błąd podczas pobierania handlowców:", error);
       setSalesReps([]);
     }
-  };
+  }, []);
   
   // Pobierz raporty dla wybranego klienta
-  const fetchClientReports = async (clientId) => {
+  const fetchClientReports = useCallback(async (clientId) => {
     try {
       const q = query(collection(db, "reports"), where("clientId", "==", clientId));
       const querySnapshot = await getDocs(q);
@@ -2429,10 +3736,10 @@ function ClientManagement() {
       console.error("Błąd podczas pobierania raportów:", error);
       setReports([]);
     }
-  };
+  }, []);
 
   // Pobierz notatki dla wybranego klienta
-  const fetchClientNotes = async (clientId) => {
+  const fetchClientNotes = useCallback(async (clientId) => {
     try {
       const q = query(
         collection(db, "notes"), 
@@ -2446,12 +3753,10 @@ function ClientManagement() {
         ...doc.data()
       }));
       
-      setNotes(notesData);
     } catch (error) {
       console.error("Błąd podczas pobierania notatek:", error);
-      setNotes([]);
     }
-  };
+  }, []);
   
   // Przypisz klienta do handlowca
   const assignClientToSalesRep = async (clientId, salesRepId) => {
@@ -2467,22 +3772,89 @@ function ClientManagement() {
     } catch (error) {
       console.error("Błąd podczas przypisywania klienta:", error);
       alert("Wystąpił błąd podczas przypisywania klienta");
-          }
+    }
+  };
+  
+  // Edytuj dane klienta
+  const editClient = async () => {
+    if (!editClientData || editClientData.name.trim() === '') return;
+    
+    try {
+      const clientRef = doc(db, "clients", editClientData.id);
+      await updateDoc(clientRef, {
+        name: editClientData.name,
+        address: editClientData.address,
+        postalCode: editClientData.postalCode,
+        city: editClientData.city,
+        email: editClientData.email,
+        website: editClientData.website,
+        phone: editClientData.phone,
+        updatedAt: new Date().toISOString()
+      });
+      
+      // Odśwież dane klienta
+      fetchAllClients();
+      if (selectedClient && selectedClient.id === editClientData.id) {
+        setSelectedClient({
+          ...selectedClient,
+          ...editClientData
+        });
+      }
+      
+      setShowEditClientModal(false);
+      setEditClientData(null);
+    } catch (error) {
+      console.error("Błąd podczas edycji klienta:", error);
+    }
+  };
+  
+  // Usuń klienta
+  const deleteClient = async (clientId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć tego klienta? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      // Usuń klienta
+      await deleteDoc(doc(db, "clients", clientId));
+      
+      // Odśwież listę klientów
+      fetchAllClients();
+      
+      // Jeśli usunięty klient był wybrany, zresetuj wybór
+      if (selectedClient && selectedClient.id === clientId) {
+        setSelectedClient(null);
+        setReports([]);
+      }
+    } catch (error) {
+      console.error("Błąd podczas usuwania klienta:", error);
+      alert("Wystąpił błąd podczas usuwania klienta");
+    }
   };
 
-  // Generuj raport PDF
-  const generatePDF = () => {
+  // Generuj raport PDF na firmowym papierze dla wybranego raportu
+  const generateCompanyPDF = async (report) => {
     if (!selectedClient) return;
     
-    const doc = generateClientReport(selectedClient, reports, notes);
-    doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`);
+    const salesRep = salesReps.find(rep => rep.id === report.salesRepId);
+    const salesRepName = salesRep ? salesRep.username : "Nieznany";
+    
+    await generateCompanyReportPDF(selectedClient, report, {
+      username: salesRepName
+    });
+  };
+  
+  // Generuj standardowy raport PDF dla wybranego raportu
+  const generateSinglePDF = async (report) => {
+    if (!selectedClient) return;
+    await generateSingleReportPDF(selectedClient, report);
   };
   
   // Efekt przy pierwszym ładowaniu
   useEffect(() => {
     fetchAllClients();
     fetchSalesReps();
-  }, []);
+  }, [fetchAllClients, fetchSalesReps]);
   
   // Efekt przy zmianie wybranego klienta
   useEffect(() => {
@@ -2490,7 +3862,7 @@ function ClientManagement() {
       fetchClientReports(selectedClient.id);
       fetchClientNotes(selectedClient.id);
     }
-  }, [selectedClient]);
+  }, [selectedClient, fetchClientReports, fetchClientNotes]);
   
   // Filtrowanie klientów na podstawie wyszukiwania
   const filteredClients = searchTerm.trim() === ''
@@ -2503,6 +3875,25 @@ function ClientManagement() {
   const getSalesRepName = (salesRepId) => {
     const salesRep = salesReps.find(rep => rep.id === salesRepId);
     return salesRep ? salesRep.username : 'Nieprzypisany';
+  };
+  
+  // Usuń raport
+  const deleteReport = async (reportId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      await deleteDoc(doc(db, "reports", reportId));
+      
+      // Odśwież listę raportów
+      if (selectedClient) {
+        fetchClientReports(selectedClient.id);
+      }
+    } catch (error) {
+      console.error("Błąd podczas usuwania raportu:", error);
+      alert("Wystąpił błąd podczas usuwania raportu");
+    }
   };
   
   return (
@@ -2539,9 +3930,31 @@ function ClientManagement() {
                   <p className="client-rep">
                     Handlowiec: {getSalesRepName(client.salesRepId)}
                   </p>
+                  {client.city && <p className="client-city">{client.city}</p>}
                   <p className="client-date">
                     Dodano: {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : 'brak daty'}
                   </p>
+                  <div className="client-actions">
+                    <button 
+                      className="btn btn-secondary btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditClientData(client);
+                        setShowEditClientModal(true);
+                      }}
+                    >
+                      Edytuj
+                    </button>
+                    <button 
+                      className="btn btn-danger btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteClient(client.id);
+                      }}
+                    >
+                      Usuń
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -2552,27 +3965,33 @@ function ClientManagement() {
           {selectedClient ? (
             <>
               <div className="client-header flex justify-between items-center mb-4">
-                <h4 className="text-xl font-bold">{selectedClient.name}</h4>
-                <div className="flex space-x-2">
-                  <button 
-                    className="btn btn-primary" 
-                    onClick={generatePDF}
+                <div>
+                  <h4 className="text-xl font-bold">{selectedClient.name}</h4>
+                  {selectedClient.address && (
+                    <p className="text-gray-600">{selectedClient.address}</p>
+                  )}
+                  {selectedClient.postalCode && selectedClient.city && (
+                    <p className="text-gray-600">{selectedClient.postalCode} {selectedClient.city}</p>
+                  )}
+                  {selectedClient.email && (
+                    <p className="text-gray-600">Email: {selectedClient.email}</p>
+                  )}
+                  {selectedClient.phone && (
+                    <p className="text-gray-600">Tel: {selectedClient.phone}</p>
+                  )}
+                </div>
+                <div className="client-assign">
+                  <span className="mr-2">Przypisz do:</span>
+                  <select
+                    className="input-field"
+                    value={selectedClient.salesRepId || ''}
+                    onChange={(e) => assignClientToSalesRep(selectedClient.id, e.target.value)}
                   >
-                    Generuj PDF
-                  </button>
-                  <div className="client-assign ml-4">
-                    <span className="mr-2">Przypisz do:</span>
-                    <select
-                      className="input-field"
-                      value={selectedClient.salesRepId || ''}
-                      onChange={(e) => assignClientToSalesRep(selectedClient.id, e.target.value)}
-                    >
-                      <option value="">Wybierz handlowca</option>
-                      {salesReps.map(rep => (
-                        <option key={rep.id} value={rep.id}>{rep.username}</option>
-                      ))}
-                    </select>
-                  </div>
+                    <option value="">Wybierz handlowca</option>
+                    {salesReps.map(rep => (
+                      <option key={rep.id} value={rep.id}>{rep.username}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               
@@ -2605,17 +4024,37 @@ function ClientManagement() {
                           <div className="report-header mb-3 flex justify-between items-center">
                             <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
                             
-                            {/* Przycisk do generowania PDF dla pojedynczego raportu */}
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => {
-                                const doc = generateSingleReportPDF(selectedClient, report);
-                                doc.save(`raport_${selectedClient.name.replace(/\s+/g, '_')}_${new Date(report.date).toISOString().split('T')[0]}.pdf`);
-                              }}
-                            >
-                              Generuj PDF
-                            </button>
+                            {/* Przyciski do generowania PDF i usuwania raportu */}
+                            <div className="flex space-x-2">
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => generateSinglePDF(report)}
+                              >
+                                Generuj PDF
+                              </button>
+                              <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => generateCompanyPDF(report)}
+                              >
+                                Generuj raport firmowy
+                              </button>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                onClick={() => deleteReport(report.id)}
+                              >
+                                Usuń
+                              </button>
+                            </div>
                           </div>
+                          
+                          {report.processName && (
+                            <p className="mb-2"><strong>Proces:</strong> {report.processName}</p>
+                          )}
+                          
+                          {report.researchGoal && (
+                            <p className="mb-2"><strong>Cel badań:</strong> {report.researchGoal}</p>
+                          )}
+                          
                           <div className="table-container overflow-x-auto">
                             <table className="data-table w-full border-collapse">
                               <thead>
@@ -2642,6 +4081,13 @@ function ClientManagement() {
                               </tbody>
                             </table>
                           </div>
+                          
+                          {report.summary && (
+                            <div className="mt-3">
+                              <strong>Podsumowanie:</strong>
+                              <p className="mt-1">{report.summary}</p>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2663,6 +4109,111 @@ function ClientManagement() {
           )}
         </div>
       </div>
+      
+      {/* Modal edycji klienta */}
+      {showEditClientModal && editClientData && (
+        <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
+            <h3 className="modal-title text-xl font-bold mb-4">Edytuj klienta</h3>
+            <div className="modal-form mb-4">
+              <div className="mb-3">
+                <label className="block mb-1">Nazwa klienta</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.name}
+                  onChange={(e) => setEditClientData({...editClientData, name: e.target.value})}
+                  placeholder="Podaj nazwę klienta"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Adres</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.address || ''}
+                  onChange={(e) => setEditClientData({...editClientData, address: e.target.value})}
+                  placeholder="Podaj adres"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div>
+                  <label className="block mb-1">Kod pocztowy</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={editClientData.postalCode || ''}
+                    onChange={(e) => setEditClientData({...editClientData, postalCode: e.target.value})}
+                    placeholder="Kod pocztowy"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-1">Miejscowość</label>
+                  <input
+                    type="text"
+                    className="input-field w-full"
+                    value={editClientData.city || ''}
+                    onChange={(e) => setEditClientData({...editClientData, city: e.target.value})}
+                    placeholder="Miejscowość"
+                  />
+                </div>
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Email</label>
+                <input
+                  type="email"
+                  className="input-field w-full"
+                  value={editClientData.email || ''}
+                  onChange={(e) => setEditClientData({...editClientData, email: e.target.value})}
+                  placeholder="Adres email"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Strona WWW</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.website || ''}
+                  onChange={(e) => setEditClientData({...editClientData, website: e.target.value})}
+                  placeholder="Strona www"
+                />
+              </div>
+              
+              <div className="mb-3">
+                <label className="block mb-1">Telefon</label>
+                <input
+                  type="text"
+                  className="input-field w-full"
+                  value={editClientData.phone || ''}
+                  onChange={(e) => setEditClientData({...editClientData, phone: e.target.value})}
+                  placeholder="Numer telefonu"
+                />
+              </div>
+            </div>
+            <div className="modal-actions flex justify-end space-x-2">
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setShowEditClientModal(false);
+                  setEditClientData(null);
+                }}
+              >
+                Anuluj
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={editClient}
+              >
+                Zapisz zmiany
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   ); 
 }
@@ -2696,12 +4247,19 @@ function AdminPanel({ fetchProducts, products }) {
         >
           Wszyscy Klienci
         </div>
+        <div 
+          className={`admin-tab ${activeSection === 'reports' ? 'active' : ''}`}
+          onClick={() => setActiveSection('reports')}
+        >
+          Raporty
+        </div>
       </div>
       
       <div className="admin-content">
         {activeSection === 'users' && <UserManagement />}
         {activeSection === 'products' && <ProductManagement fetchProducts={fetchProducts} products={products} />}
         {activeSection === 'clients' && <ClientManagement />}
+        {activeSection === 'reports' && <ReportsManagement />}
       </div>
     </div>
   );
@@ -2803,7 +4361,7 @@ function App() {
   };
   
   // Pobierz produkty z Firestore
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "products"));
       const productsData = querySnapshot.docs.map(doc => ({
@@ -2817,7 +4375,7 @@ function App() {
     } catch (error) {
       console.error("Błąd podczas pobierania produktów:", error);
     }
-  };
+  }, []);
 
   // Effect do inicjalizacji danych i obsługi autoryzacji
   useEffect(() => {
@@ -2866,7 +4424,7 @@ function App() {
     fetchProducts();
     
     return () => unsubscribe();
-  }, []);
+  }, [fetchProducts]);
 
   // Renderowanie podczas ładowania
   if (isAuthLoading) {
@@ -2888,7 +4446,7 @@ function App() {
     <div className="app-container">
       <div className="header">
         <div className="header-title">
-          <img src="https://i.ibb.co/fYxC8dh8/Projekt-bez-nazwy-17.png" alt="Logo" className="logo" />
+          <img src="https://i.ibb.co/fYxC8dh/Projekt-bez-nazwy-17.png" alt="Logo" className="logo" />
           <h1>Haug Chemie®Polska HelpDesk</h1>
         </div>
         
