@@ -738,7 +738,7 @@ async function generateCompanyReportPDF(client, report, companyData = {}) {
           <div class="page-container">
             <div class="letterhead">
               <!-- Tło papieru firmowego jako obraz -->
-              <img src="https://i.ibb.co/vxyBxJFQ/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+              <img src="/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
             </div>
             
             <div class="content">
@@ -1021,7 +1021,7 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
         <body>
           <div class="page">
             <div class="letterhead">
-              <img src="https://i.ibb.co/vxyBxJFQ/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+              <img src="/papier-firmowy-1.pngg" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
             </div>
             ${headerHtml}
             ${contentHtml}
@@ -1074,7 +1074,7 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
               if (index > 0) {
                 const letterhead = doc.createElement('div');
                 letterhead.className = 'letterhead';
-                letterhead.innerHTML = `<img src="https://i.ibb.co/vxyBxJFQ/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
+                letterhead.innerHTML = `<img src="/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
                 page.insertBefore(letterhead, page.firstChild);
               }
             });
