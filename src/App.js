@@ -627,252 +627,264 @@ async function generateCompanyReportPDF(client, report, companyData = {}) {
     // Użyj niestandardowego celu badań jeśli jest dostępny
     const researchGoal = report.researchGoal || "Kontrola parametrów procesów.";
     
-    // Przygotuj HTML dokumentu
-    const reportHtml = `
-      <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            @font-face {
-              font-family: 'Roboto';
-              font-style: normal;
-              font-weight: 400;
-              src: url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
-            }
-            body {
-              font-family: 'Roboto', Arial, sans-serif;
-              margin: 0;
-              padding: 0;
-              position: relative;
-              font-size: 10pt; /* Zmniejszono rozmiar czcionki z 11pt */
-            }
-            .page-container {
-              position: relative;
-              page-break-after: always;
-            }
-            .page-container:last-child {
-              page-break-after: auto;
-            }
-            .letterhead {
-              position: absolute;
-              top: 0;
-              left: 0;
-              width: 100%;
-              height: 297mm; /* Pełna wysokość strony A4 */
-              z-index: -1;
-            }
-            .content {
-              padding-top: 35mm; /* Zmniejszono margines z góry */
-              padding-left: 20mm;
-              padding-right: 20mm;
-              padding-bottom: 40mm; /* Zwiększono margines z dołu, aby zmieścić stopkę */
-              z-index: 1;
-            }
-            .header {
-              margin-bottom: 8mm; /* Zmniejszono odstęp */
-            }
-            .client-data {
-              margin-bottom: 4mm; /* Zmniejszono odstęp */
-            }
-            .date {
-              text-align: right;
-              margin-bottom: 8mm; /* Zmniejszono odstęp */
-            }
-            .report-title-box {
-              border: 1px solid black;
-              padding: 2mm; /* Zmniejszono padding */
-              text-align: center;
-              margin-bottom: 4mm; /* Zmniejszono odstęp */
-            }
-            .report-date {
-              text-align: center;
-              margin-bottom: 8mm; /* Zmniejszono odstęp */
-            }
-            .section {
-              margin-bottom: 3mm; /* Zmniejszono odstęp */
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              margin-bottom: 6mm; /* Zmniejszono odstęp */
-              font-size: 9pt; /* Mniejsza czcionka w tabeli */
-            }
-            th {
-              background-color: #e74c3c;
-              color: white;
-              font-weight: normal;
-              text-align: center;
-              padding: 1.5mm; /* Zmniejszono padding */
-              border: 1px solid #ccc;
-            }
-            td {
-              padding: 1.5mm; /* Zmniejszono padding */
-              border: 1px solid #ccc;
-              text-align: center;
-            }
-            .result-item {
-              margin-left: 5mm;
-              margin-bottom: 1mm; /* Zmniejszono odstęp */
-            }
-            .signature {
-              margin-top: 10mm; /* Jeszcze bardziej zmniejszono margines */
-            }
-            .page-number {
-              position: absolute;
-              bottom: 10mm;
-              right: 20mm;
-              font-size: 8pt;
-            }
-            .page-footer {
-              position: absolute;
-              bottom: 25mm; /* Zwiększono odległość od dołu strony */
-              left: 0;
-              width: 100%;
-              text-align: center;
-              font-size: 8pt;
-              color: #666;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="page-container">
-            <div class="letterhead">
-              <!-- Tło papieru firmowego jako obraz -->
-              <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
-            </div>
-            
-            <div class="content">
-              <!-- Data w prawym górnym rogu -->
-              <div class="date">Pułtusk, ${formattedCurrentDate}</div>
-              
-              <!-- Dane klienta -->
-              <div class="client-data">
-                ${client.name}<br>
-                ${client.address || ''}<br>
-                ${client.postalCode || ''} ${client.city || ''}
-              </div>
-              
-              <!-- Tytuł raportu w ramce -->
-              <div class="report-title-box">
-                Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
-              </div>
-              
-              <!-- Data raportu -->
-              <div class="report-date">
-                ${formattedReportDate} roku
-              </div>
-              
-              <!-- Sekcje raportu -->
-              <div class="section">
-                1. Wykonawcy: ${companyData.username || ""}
-              </div>
-              
-              <div class="section">
-                2. Cel badań: ${researchGoal}
-              </div>
-              
-              <div class="section">
-                3. Parametry pracy kąpieli w poszczególnych strefach:
-              </div>
-              
-              <!-- Nazwa procesu -->
-              <div class="section">
-                ${report.processName || 'Proces przygotowania powierzchni'}:
-              </div>
-              
-              <!-- Tabela parametrów -->
-              <table>
-                <thead>
-                  <tr>
-                    <th>Strefa</th>
-                    <th>Stęż. preparatu</th>
-                    <th>Odczyn pH</th>
-                    <th>Przewodność</th>
-                    <th>Temperatura</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${report.zones.map((zone, idx) => `
-                    <tr>
-                      <td>${idx + 1}. ${zone.product || '-'}</td>
-                      <td>${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
-                      <td>${zone.ph || 'x'}</td>
-                      <td>${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
-                      <td>${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-              
-              <!-- Rezultaty -->
-              <div class="section">
-                4. Rezultaty:
-              </div>
-              
-              <div class="results-container">
-                ${report.summary ? 
-                  report.summary.split('\n').map(line => 
-                    line.trim() ? `<div class="result-item">• ${line.trim()}</div>` : ''
-                  ).join('') : 
-                  '<div class="result-item">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
+    return new Promise((resolve, reject) => {
+      const letterheadImg = new Image();
+      letterheadImg.src = "https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png";
+      
+      letterheadImg.onload = async () => {
+        // Przygotuj HTML dokumentu
+        const reportHtml = `
+          <html>
+            <head>
+              <meta charset="UTF-8">
+              <style>
+                @font-face {
+                  font-family: 'Roboto';
+                  font-style: normal;
+                  font-weight: 400;
+                  src: url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
                 }
+                body {
+                  font-family: 'Roboto', Arial, sans-serif;
+                  margin: 0;
+                  padding: 0;
+                  position: relative;
+                  font-size: 10pt; /* Zmniejszono rozmiar czcionki z 11pt */
+                }
+                .page-container {
+                  position: relative;
+                  page-break-after: always;
+                }
+                .page-container:last-child {
+                  page-break-after: auto;
+                }
+                .letterhead {
+                  position: absolute;
+                  top: 0;
+                  left: 0;
+                  width: 100%;
+                  height: 297mm; /* Pełna wysokość strony A4 */
+                  z-index: -1;
+                }
+                .content {
+                  padding-top: 35mm; /* Zmniejszono margines z góry */
+                  padding-left: 20mm;
+                  padding-right: 20mm;
+                  padding-bottom: 40mm; /* Zwiększono margines z dołu, aby zmieścić stopkę */
+                  z-index: 1;
+                }
+                .header {
+                  margin-bottom: 8mm; /* Zmniejszono odstęp */
+                }
+                .client-data {
+                  margin-bottom: 4mm; /* Zmniejszono odstęp */
+                }
+                .date {
+                  text-align: right;
+                  margin-bottom: 8mm; /* Zmniejszono odstęp */
+                }
+                .report-title-box {
+                  border: 1px solid black;
+                  padding: 2mm; /* Zmniejszono padding */
+                  text-align: center;
+                  margin-bottom: 4mm; /* Zmniejszono odstęp */
+                }
+                .report-date {
+                  text-align: center;
+                  margin-bottom: 8mm; /* Zmniejszono odstęp */
+                }
+                .section {
+                  margin-bottom: 3mm; /* Zmniejszono odstęp */
+                }
+                table {
+                  width: 100%;
+                  border-collapse: collapse;
+                  margin-bottom: 6mm; /* Zmniejszono odstęp */
+                  font-size: 9pt; /* Mniejsza czcionka w tabeli */
+                }
+                th {
+                  background-color: #e74c3c;
+                  color: white;
+                  font-weight: normal;
+                  text-align: center;
+                  padding: 1.5mm; /* Zmniejszono padding */
+                  border: 1px solid #ccc;
+                }
+                td {
+                  padding: 1.5mm; /* Zmniejszono padding */
+                  border: 1px solid #ccc;
+                  text-align: center;
+                }
+                .result-item {
+                  margin-left: 5mm;
+                  margin-bottom: 1mm; /* Zmniejszono odstęp */
+                }
+                .signature {
+                  margin-top: 10mm; /* Jeszcze bardziej zmniejszono margines */
+                }
+                .page-number {
+                  position: absolute;
+                  bottom: 10mm;
+                  right: 20mm;
+                  font-size: 8pt;
+                }
+                .page-footer {
+                  position: absolute;
+                  bottom: 25mm; /* Zwiększono odległość od dołu strony */
+                  left: 0;
+                  width: 100%;
+                  text-align: center;
+                  font-size: 8pt;
+                  color: #666;
+                }
+              </style>
+            </head>
+            <body>
+              <div class="page-container">
+                <div class="letterhead">
+                  <!-- Tło papieru firmowego jako obraz -->
+                  <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+                </div>
+                
+                <div class="content">
+                  <!-- Data w prawym górnym rogu -->
+                  <div class="date">Pułtusk, ${formattedCurrentDate}</div>
+                  
+                  <!-- Dane klienta -->
+                  <div class="client-data">
+                    ${client.name}<br>
+                    ${client.address || ''}<br>
+                    ${client.postalCode || ''} ${client.city || ''}
+                  </div>
+                  
+                  <!-- Tytuł raportu w ramce -->
+                  <div class="report-title-box">
+                    Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
+                  </div>
+                  
+                  <!-- Data raportu -->
+                  <div class="report-date">
+                    ${formattedReportDate} roku
+                  </div>
+                  
+                  <!-- Sekcje raportu -->
+                  <div class="section">
+                    1. Wykonawcy: ${companyData.username || ""}
+                  </div>
+                  
+                  <div class="section">
+                    2. Cel badań: ${researchGoal}
+                  </div>
+                  
+                  <div class="section">
+                    3. Parametry pracy kąpieli w poszczególnych strefach:
+                  </div>
+                  
+                  <!-- Nazwa procesu -->
+                  <div class="section">
+                    ${report.processName || 'Proces przygotowania powierzchni'}:
+                  </div>
+                  
+                  <!-- Tabela parametrów -->
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Strefa</th>
+                        <th>Stęż. preparatu</th>
+                        <th>Odczyn pH</th>
+                        <th>Przewodność</th>
+                        <th>Temperatura</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${report.zones.map((zone, idx) => `
+                        <tr>
+                          <td>${idx + 1}. ${zone.product || '-'}</td>
+                          <td>${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
+                          <td>${zone.ph || 'x'}</td>
+                          <td>${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
+                          <td>${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                  
+                  <!-- Rezultaty -->
+                  <div class="section">
+                    4. Rezultaty:
+                  </div>
+                  
+                  <div class="results-container">
+                    ${report.summary ? 
+                      report.summary.split('\n').map(line => 
+                        line.trim() ? `<div class="result-item">• ${line.trim()}</div>` : ''
+                      ).join('') : 
+                      '<div class="result-item">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
+                    }
+                  </div>
+                  
+                  <!-- Podpis -->
+                  <div class="signature">
+                    Z poważaniem,<br>
+                    ${companyData.username || ""}<br>
+                    Doradca Techniczno-Handlowy
+                  </div>
+                  
+                  <!-- Stopka na każdej stronie -->
+                  <div class="page-footer">
+                    Haug Chemie®Polska HelpDesk
+                  </div>
+                  
+                  <div class="page-number">Strona 1</div>
+                </div>
               </div>
-              
-              <!-- Podpis -->
-              <div class="signature">
-                Z poważaniem,<br>
-                ${companyData.username || ""}<br>
-                Doradca Techniczno-Handlowy
-              </div>
-              
-              <!-- Stopka na każdej stronie -->
-              <div class="page-footer">
-                Haug Chemie®Polska HelpDesk
-              </div>
-              
-              <div class="page-number">Strona 1</div>
-            </div>
-          </div>
-        </body>
-      </html>
-    `;
-    
-    // Konwersja HTML do PDF
-    const element = document.createElement('div');
-    element.innerHTML = reportHtml;
-    document.body.appendChild(element);
-    
-    try {
-      const opt = {
-        margin: 0,
-        filename: `raport_${client.name.replace(/\s+/g, '_')}_${reportDate.toISOString().split('T')[0]}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { 
-          scale: 2, 
-          useCORS: true,
-          windowWidth: 1024,
-          height: 1123, // Zdefiniowana wysokość dokumentu (297mm w pikselach przy 96 dpi * scale 2)
-          logging: true, // Włączone logowanie dla łatwiejszego debugowania
-          letterRendering: true // Lepsza jakość renderowania tekstu
-        },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-        jsPDF: { 
-          unit: 'mm', 
-          format: 'a4', 
-          orientation: 'portrait',
-          compress: true,
-          precision: 16 // Zwiększona precyzja
+            </body>
+          </html>
+        `;
+        
+        // Konwersja HTML do PDF
+        const element = document.createElement('div');
+        element.innerHTML = reportHtml;
+        document.body.appendChild(element);
+        
+        try {
+          const opt = {
+            margin: 0,
+            filename: `raport_${client.name.replace(/\s+/g, '_')}_${reportDate.toISOString().split('T')[0]}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+              scale: 2, 
+              useCORS: true,
+              windowWidth: 1024,
+              height: 1123, // Zdefiniowana wysokość dokumentu (297mm w pikselach przy 96 dpi * scale 2)
+              logging: true, // Włączone logowanie dla łatwiejszego debugowania
+              letterRendering: true // Lepsza jakość renderowania tekstu
+            },
+            pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
+            jsPDF: { 
+              unit: 'mm', 
+              format: 'a4', 
+              orientation: 'portrait',
+              compress: true,
+              precision: 16 // Zwiększona precyzja
+            }
+          };
+          
+          await html2pdf().from(element).set(opt).save();
+          document.body.removeChild(element);
+          resolve(true);
+        } catch (error) {
+          console.error("Błąd podczas generowania PDF:", error);
+          document.body.removeChild(element);
+          reject(error);
         }
       };
       
-      await html2pdf().from(element).set(opt).save();
-      document.body.removeChild(element);
-      return true;
-    } catch (error) {
-      console.error("Błąd podczas generowania PDF:", error);
-      document.body.removeChild(element);
-      return null;
-    }
+      letterheadImg.onerror = (error) => {
+        console.error("Błąd ładowania obrazu:", error);
+        reject(error);
+      };
+    });
   } catch (error) {
     console.error("Błąd podczas przygotowywania raportu:", error);
     return null;
