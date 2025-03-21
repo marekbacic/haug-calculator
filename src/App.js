@@ -738,7 +738,7 @@ async function generateCompanyReportPDF(client, report, companyData = {}) {
           <div class="page-container">
             <div class="letterhead">
               <!-- Tło papieru firmowego jako obraz -->
-              <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+              <img src="http://wenecjapultusk.pl/papier.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
             </div>
             
             <div class="content">
@@ -1021,7 +1021,7 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
         <body>
           <div class="page">
             <div class="letterhead">
-              <img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+              <img src="http://wenecjapultusk.pl/papier.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
             </div>
             ${headerHtml}
             ${contentHtml}
@@ -1074,7 +1074,7 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
               if (index > 0) {
                 const letterhead = doc.createElement('div');
                 letterhead.className = 'letterhead';
-                letterhead.innerHTML = `<img src="https://i.ibb.co/Ldt5Fjgh/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
+                letterhead.innerHTML = `<img src="http://wenecjapultusk.pl/papier.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
                 page.insertBefore(letterhead, page.firstChild);
               }
             });
@@ -1491,7 +1491,7 @@ function LoginScreen() {
       <div className="login-box">
         <div className="login-header">
           <h1>Haug Chemie®Polska HelpDesk</h1>
-          <img src="https://i.ibb.co/FLQ9pJZL/Projekt-bez-nazwy-17.png" alt="Logo" className="login-logo" />
+          <img src="http://wenecjapultusk.pl/logo.png" alt="Logo" className="login-logo" />
         </div>
         
         <div className="login-form">
@@ -4446,7 +4446,7 @@ function App() {
     <div className="app-container">
       <div className="header">
         <div className="header-title">
-          <img src="https://i.ibb.co/FLQ9pJZL/Projekt-bez-nazwy-17.png" alt="Logo" className="logo" />
+          <img src="http://wenecjapultusk.pl/logo.png" alt="Logo" className="logo" />
           <h1>Haug Chemie®Polska HelpDesk</h1>
         </div>
         
