@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { db, auth } from './firebase/config';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { db, auth, storage } from './firebase/config';
 import { 
   collection, 
   addDoc, 
@@ -19,11 +19,12 @@ import {
   signOut, 
   onAuthStateChanged 
 } from 'firebase/auth';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import './index.css';
-// Importuj bibliotekę html2pdf.js
+// Import html2pdf.js
 import html2pdf from 'html2pdf.js';
 
-// Pełna baza danych chłodziw na podstawie tabeli
+// Full database of coolants based on the table
 const coolantDatabase = [
   {
     name: "eska®cool 2300",
@@ -306,7 +307,7 @@ const coolantDatabase = [
   }
 ];
 
-// Funkcja do formatowania polskiej daty
+// Function to format Polish date
 const formatDateInPolish = (date) => {
   if (!date) return '';
   
@@ -318,7 +319,7 @@ const formatDateInPolish = (date) => {
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
 };
 
-// Pomocnicza funkcja do formatowania daty
+// Helper function to format date
 const formatDate = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
@@ -329,11 +330,11 @@ const formatDate = (dateString) => {
   });
 };
 
-// Funkcja do obliczania numeru raportu - zmodyfikowana, aby była globalna
+// Function to calculate report number - modified to be global
 async function calculateReportNumber() {
   const currentYear = new Date().getFullYear();
   
-  // Pobierz wszystkie raporty z bieżącego roku, niezależnie od klienta
+  // Get all reports from current year, regardless of client
   const startOfYear = new Date(`${currentYear}-01-01T00:00:00`);
   const endOfYear = new Date(`${currentYear}-12-31T23:59:59`);
   
@@ -346,24 +347,37 @@ async function calculateReportNumber() {
     );
     
     const querySnapshot = await getDocs(q);
-    // Liczba raportów + 1 będzie nowym numerem
+    // Number of reports + 1 will be the new number
     const reportCount = querySnapshot.docs.length;
     return reportCount + 1;
   } catch (error) {
-    console.error("Błąd podczas pobierania raportów:", error);
-    // W przypadku błędu, użyj timestamp jako unikalne ID
+    console.error("Error while retrieving reports:", error);
+    // In case of error, use timestamp as unique ID
     return Math.floor(Date.now() / 1000) % 1000;
   }
 }
 
-// Generowanie raportu PDF dla całego klienta z użyciem html2pdf
+// Function to upload and get letterhead URL from Firebase Storage
+async function getLetterheadUrl() {
+  try {
+    // Try to get the existing URL first
+    const letterheadRef = ref(storage, 'assets/papier-firmowy.png');
+    return await getDownloadURL(letterheadRef);
+  } catch (error) {
+    console.error("Error getting letterhead URL:", error);
+    // Fallback to a placeholder or default URL
+    return "https://via.placeholder.com/595x842?text=Company+Letterhead";
+  }
+}
+
+// Generating client report PDF using html2pdf
 async function generateClientReport(client, reports, notes) {
   if (!client) return null;
   
-  // Przygotuj dane dla raportu
+  // Prepare data for report
   const currentDate = new Date().toLocaleDateString('pl-PL');
   
-  // Tworzenie HTML
+  // Create HTML
   let html = `
     <html>
       <head>
@@ -429,6 +443,19 @@ async function generateClientReport(client, reports, notes) {
         `;
       }
       
+      if (report.photos && report.photos.length > 0) {
+        html += `<h4>Zdjęcia:</h4><div class="photos-container">`;
+        report.photos.forEach(photo => {
+          html += `
+            <div class="photo-item">
+              <img src="${photo.url}" alt="Zdjęcie raportu" style="max-width: 300px; margin: 10px;">
+              <p>${photo.description || ''}</p>
+            </div>
+          `;
+        });
+        html += `</div>`;
+      }
+      
       if (report.summary) {
         html += `
           <div class="summary">
@@ -482,7 +509,7 @@ async function generateClientReport(client, reports, notes) {
     </html>
   `;
   
-  // Konwersja HTML do PDF z użyciem html2pdf
+  // Convert HTML to PDF using html2pdf
   const element = document.createElement('div');
   element.innerHTML = html;
   document.body.appendChild(element);
@@ -500,17 +527,17 @@ async function generateClientReport(client, reports, notes) {
     document.body.removeChild(element);
     return true;
   } catch (error) {
-    console.error("Błąd podczas generowania PDF:", error);
+    console.error("Error generating PDF:", error);
     document.body.removeChild(element);
     return null;
   }
 }
 
-// Generowanie pojedynczego raportu PDF
+// Generate single report PDF
 async function generateSingleReportPDF(client, report) {
   if (!client || !report) return null;
   
-  // Tworzenie HTML
+  // Create HTML
   let html = `
     <html>
       <head>
@@ -522,6 +549,10 @@ async function generateSingleReportPDF(client, report) {
           th { background-color: #4682B4; color: white; padding: 8px; }
           td { border: 1px solid #ddd; padding: 8px; }
           .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #666; }
+          .photo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
+          .photo-item { text-align: center; }
+          .photo-item img { max-width: 100%; height: auto; }
+          .photo-caption { margin-top: 5px; font-style: italic; }
         </style>
       </head>
       <body>
@@ -574,6 +605,23 @@ async function generateSingleReportPDF(client, report) {
     `;
   }
   
+  // Add photos if present
+  if (report.photos && report.photos.length > 0) {
+    html += `<h3>Zdjęcia:</h3>
+    <div class="photo-grid">`;
+    
+    report.photos.forEach(photo => {
+      html += `
+        <div class="photo-item">
+          <img src="${photo.url}" alt="Zdjęcie raportu">
+          <p class="photo-caption">${photo.description || ''}</p>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+  }
+  
   html += `
         <div class="footer">
           Haug Chemie®Polska HelpDesk - Raport z dnia ${new Date(report.date).toLocaleDateString('pl-PL')}
@@ -582,7 +630,7 @@ async function generateSingleReportPDF(client, report) {
     </html>
   `;
   
-  // Konwersja HTML do PDF
+  // Convert HTML to PDF
   const element = document.createElement('div');
   element.innerHTML = html;
   document.body.appendChild(element);
@@ -600,380 +648,198 @@ async function generateSingleReportPDF(client, report) {
     document.body.removeChild(element);
     return true;
   } catch (error) {
-    console.error("Błąd podczas generowania PDF:", error);
+    console.error("Error generating PDF:", error);
     document.body.removeChild(element);
     return null;
   }
 }
 
-// Zmodyfikowana funkcja generowania raportu PDF na papierze firmowym
+// Modified function to generate company report with letterhead from Firebase Storage
 async function generateCompanyReportPDF(client, report, companyData = {}) {
   if (!client || !report) return null;
   
   try {
-    // Oblicz numer raportu (zmodyfikowane - globalny numer)
+    // Get letterhead URL from Firebase Storage
+    const letterheadUrl = await getLetterheadUrl();
+    
+    // Calculate report number (modified - global number)
     const reportNumber = await calculateReportNumber();
-    // Format: XX/ANL/YYYY (zgodnie z przykładem 23/ANL/2025)
+    // Format: XX/ANL/YYYY (according to example 23/ANL/2025)
     const formattedReportNumber = `${reportNumber}/ANL/${new Date().getFullYear()}`;
     
-    // Format daty raportu
+    // Format report date
     const reportDate = new Date(report.date);
     const formattedReportDate = formatDateInPolish(reportDate);
     
-    // Format aktualnej daty
+    // Format current date
     const currentDate = new Date();
     const formattedCurrentDate = `${currentDate.getDate()}.${currentDate.getMonth() + 1}.${currentDate.getFullYear()}`;
     
-    // Użyj niestandardowego celu badań jeśli jest dostępny
+    // Use custom research goal if available
     const researchGoal = report.researchGoal || "Kontrola parametrów procesów.";
     
-    return new Promise((resolve, reject) => {
-      const letterheadImg = new Image();
-      letterheadImg.src = "/papier-firmowy-1.png";
-      
-      letterheadImg.onload = async () => {
-        // Przygotuj HTML dokumentu
-        const reportHtml = `
-          <html>
-            <head>
-              <meta charset="UTF-8">
-              <style>
-                @font-face {
-                  font-family: 'Roboto';
-                  font-style: normal;
-                  font-weight: 400;
-                  src: url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
-                }
-                body {
-                  font-family: 'Roboto', Arial, sans-serif;
-                  margin: 0;
-                  padding: 0;
-                  position: relative;
-                  font-size: 10pt; /* Zmniejszono rozmiar czcionki z 11pt */
-                }
-                .page-container {
-                  position: relative;
-                  page-break-after: always;
-                }
-                .page-container:last-child {
-                  page-break-after: auto;
-                }
-                .letterhead {
-                  position: absolute;
-                  top: 0;
-                  left: 0;
-                  width: 100%;
-                  height: 297mm; /* Pełna wysokość strony A4 */
-                  z-index: -1;
-                }
-                .content {
-                  padding-top: 35mm; /* Zmniejszono margines z góry */
-                  padding-left: 20mm;
-                  padding-right: 20mm;
-                  padding-bottom: 40mm; /* Zwiększono margines z dołu, aby zmieścić stopkę */
-                  z-index: 1;
-                }
-                .header {
-                  margin-bottom: 8mm; /* Zmniejszono odstęp */
-                }
-                .client-data {
-                  margin-bottom: 4mm; /* Zmniejszono odstęp */
-                }
-                .date {
-                  text-align: right;
-                  margin-bottom: 8mm; /* Zmniejszono odstęp */
-                }
-                .report-title-box {
-                  border: 1px solid black;
-                  padding: 2mm; /* Zmniejszono padding */
-                  text-align: center;
-                  margin-bottom: 4mm; /* Zmniejszono odstęp */
-                }
-                .report-date {
-                  text-align: center;
-                  margin-bottom: 8mm; /* Zmniejszono odstęp */
-                }
-                .section {
-                  margin-bottom: 3mm; /* Zmniejszono odstęp */
-                }
-                table {
-                  width: 100%;
-                  border-collapse: collapse;
-                  margin-bottom: 6mm; /* Zmniejszono odstęp */
-                  font-size: 9pt; /* Mniejsza czcionka w tabeli */
-                }
-                th {
-                  background-color: #e74c3c;
-                  color: white;
-                  font-weight: normal;
-                  text-align: center;
-                  padding: 1.5mm; /* Zmniejszono padding */
-                  border: 1px solid #ccc;
-                }
-                td {
-                  padding: 1.5mm; /* Zmniejszono padding */
-                  border: 1px solid #ccc;
-                  text-align: center;
-                }
-                .result-item {
-                  margin-left: 5mm;
-                  margin-bottom: 1mm; /* Zmniejszono odstęp */
-                }
-                .signature {
-                  margin-top: 10mm; /* Jeszcze bardziej zmniejszono margines */
-                }
-                .page-number {
-                  position: absolute;
-                  bottom: 10mm;
-                  right: 20mm;
-                  font-size: 8pt;
-                }
-                .page-footer {
-                  position: absolute;
-                  bottom: 25mm; /* Zwiększono odległość od dołu strony */
-                  left: 0;
-                  width: 100%;
-                  text-align: center;
-                  font-size: 8pt;
-                  color: #666;
-                }
-              </style>
-            </head>
-            <body>
-              <div class="page-container">
-                <div class="letterhead">
-                  <!-- Tło papieru firmowego jako obraz -->
-                  <img src="/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
-                </div>
-                
-                <div class="content">
-                  <!-- Data w prawym górnym rogu -->
-                  <div class="date">Pułtusk, ${formattedCurrentDate}</div>
-                  
-                  <!-- Dane klienta -->
-                  <div class="client-data">
-                    ${client.name}<br>
-                    ${client.address || ''}<br>
-                    ${client.postalCode || ''} ${client.city || ''}
-                  </div>
-                  
-                  <!-- Tytuł raportu w ramce -->
-                  <div class="report-title-box">
-                    Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
-                  </div>
-                  
-                  <!-- Data raportu -->
-                  <div class="report-date">
-                    ${formattedReportDate} roku
-                  </div>
-                  
-                  <!-- Sekcje raportu -->
-                  <div class="section">
-                    1. Wykonawcy: ${companyData.username || ""}
-                  </div>
-                  
-                  <div class="section">
-                    2. Cel badań: ${researchGoal}
-                  </div>
-                  
-                  <div class="section">
-                    3. Parametry pracy kąpieli w poszczególnych strefach:
-                  </div>
-                  
-                  <!-- Nazwa procesu -->
-                  <div class="section">
-                    ${report.processName || 'Proces przygotowania powierzchni'}:
-                  </div>
-                  
-                  <!-- Tabela parametrów -->
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Strefa</th>
-                        <th>Stęż. preparatu</th>
-                        <th>Odczyn pH</th>
-                        <th>Przewodność</th>
-                        <th>Temperatura</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${report.zones.map((zone, idx) => `
-                        <tr>
-                          <td>${idx + 1}. ${zone.product || '-'}</td>
-                          <td>${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
-                          <td>${zone.ph || 'x'}</td>
-                          <td>${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
-                          <td>${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
-                        </tr>
-                      `).join('')}
-                    </tbody>
-                  </table>
-                  
-                  <!-- Rezultaty -->
-                  <div class="section">
-                    4. Rezultaty:
-                  </div>
-                  
-                  <div class="results-container">
-                    ${report.summary ? 
-                      report.summary.split('\n').map(line => 
-                        line.trim() ? `<div class="result-item">• ${line.trim()}</div>` : ''
-                      ).join('') : 
-                      '<div class="result-item">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
-                    }
-                  </div>
-                  
-                  <!-- Podpis -->
-                  <div class="signature">
-                    Z poważaniem,<br>
-                    ${companyData.username || ""}<br>
-                    Doradca Techniczno-Handlowy
-                  </div>
-                  
-                  <!-- Stopka na każdej stronie -->
-                  <div class="page-footer">
-                    Haug Chemie®Polska HelpDesk
-                  </div>
-                  
-                  <div class="page-number">Strona 1</div>
-                </div>
-              </div>
-            </body>
-          </html>
-        `;
+    // Prepare HTML for the first page
+    let firstPageHtml = `
+      <div class="page-container first-page">
+        <div class="letterhead">
+          <img src="${letterheadUrl}" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+        </div>
         
-        // Konwersja HTML do PDF
-        const element = document.createElement('div');
-        element.innerHTML = reportHtml;
-        document.body.appendChild(element);
-        
-        try {
-          const opt = {
-            margin: 0,
-            filename: `raport_${client.name.replace(/\s+/g, '_')}_${reportDate.toISOString().split('T')[0]}.pdf`,
-            image: { type: 'jpeg', quality: 0.98 },
-            html2canvas: { 
-              scale: 2, 
-              useCORS: true,
-              windowWidth: 1024,
-              height: 1123, // Zdefiniowana wysokość dokumentu (297mm w pikselach przy 96 dpi * scale 2)
-              logging: true, // Włączone logowanie dla łatwiejszego debugowania
-              letterRendering: true // Lepsza jakość renderowania tekstu
-            },
-            pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
-            jsPDF: { 
-              unit: 'mm', 
-              format: 'a4', 
-              orientation: 'portrait',
-              compress: true,
-              precision: 16 // Zwiększona precyzja
-            }
-          };
+        <div class="content">
+          <!-- Date in top right corner -->
+          <div class="date">Pułtusk, ${formattedCurrentDate}</div>
           
-          await html2pdf().from(element).set(opt).save();
-          document.body.removeChild(element);
-          resolve(true);
-        } catch (error) {
-          console.error("Błąd podczas generowania PDF:", error);
-          document.body.removeChild(element);
-          reject(error);
-        }
-      };
-      
-      letterheadImg.onerror = (error) => {
-        console.error("Błąd ładowania obrazu:", error);
-        reject(error);
-      };
-    });
-  } catch (error) {
-    console.error("Błąd podczas przygotowywania raportu:", error);
-    return null;
-  }
-}
-
-// Dodatkowa funkcja do obsługi wielostronicowych raportów
-async function generateMultiPageReportPDF(client, report, companyData = {}) {
-  if (!client || !report) return null;
-  
-  try {
-    // Oblicz numer raportu (zmodyfikowane - globalny numer)
-    const reportNumber = await calculateReportNumber();
-    const formattedReportNumber = `${reportNumber}/ANL/${new Date().getFullYear()}`;
-    
-    // Dane formatowania
-    const reportDate = new Date(report.date);
-    const formattedReportDate = formatDateInPolish(reportDate);
-    const currentDate = new Date();
-    const formattedCurrentDate = `${currentDate.getDate()}.${currentDate.getMonth() + 1}.${currentDate.getFullYear()}`;
-    
-    // Użyj niestandardowego celu badań jeśli jest dostępny
-    const researchGoal = report.researchGoal || "Kontrola parametrów procesów.";
-    
-    // Przygotuj styl i nagłówek dokumentu
-    const headerHtml = `
-      <div style="padding: 10mm 20mm 0 20mm;">
-        <div style="text-align: right; margin-bottom: 5mm;">Pułtusk, ${formattedCurrentDate}</div>
-        <div style="margin-bottom: 5mm;">
-          ${client.name}<br>
-          ${client.address || ''}<br>
-          ${client.postalCode || ''} ${client.city || ''}
-        </div>
-        <div style="border: 1px solid black; padding: 2mm; text-align: center; margin-bottom: 5mm;">
-          Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
-        </div>
-        <div style="text-align: center; margin-bottom: 8mm;">${formattedReportDate} roku</div>
-      </div>
+          <!-- Client data -->
+          <div class="client-data">
+            ${client.name}<br>
+            ${client.address || ''}<br>
+            ${client.postalCode || ''} ${client.city || ''}
+          </div>
+          
+          <!-- Report title in box -->
+          <div class="report-title-box">
+            Protokół z analizy kąpieli na linii technologicznej nr ${formattedReportNumber}
+          </div>
+          
+          <!-- Report date -->
+          <div class="report-date">
+            ${formattedReportDate} roku
+          </div>
+          
+          <!-- Report sections -->
+          <div class="section">
+            1. Wykonawcy: ${companyData.username || ""}
+          </div>
+          
+          <div class="section">
+            2. Cel badań: ${researchGoal}
+          </div>
+          
+          <div class="section">
+            3. Parametry pracy kąpieli w poszczególnych strefach:
+          </div>
+          
+          <!-- Process name -->
+          <div class="section">
+            ${report.processName || 'Proces przygotowania powierzchni'}:
+          </div>
+          
+          <!-- Parameters table -->
+          <table>
+            <thead>
+              <tr>
+                <th>Strefa</th>
+                <th>Stęż. preparatu</th>
+                <th>Odczyn pH</th>
+                <th>Przewodność</th>
+                <th>Temperatura</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${report.zones.map((zone, idx) => `
+                <tr>
+                  <td>${idx + 1}. ${zone.product || '-'}</td>
+                  <td>${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
+                  <td>${zone.ph || 'x'}</td>
+                  <td>${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
+                  <td>${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          
+          <!-- Results -->
+          <div class="section">
+            4. Rezultaty:
+          </div>
+          
+          <div class="results-container">
+            ${report.summary ? 
+              report.summary.split('\n').map(line => 
+                line.trim() ? `<div class="result-item">• ${line.trim()}</div>` : ''
+              ).join('') : 
+              '<div class="result-item">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
+            }
+          </div>
     `;
     
-    // Przygotuj sekcje raportu
-    const contentHtml = `
-      <div style="padding: 0 20mm;">
-        <div style="margin-bottom: 3mm;">1. Wykonawcy: ${companyData.username || ""}</div>
-        <div style="margin-bottom: 3mm;">2. Cel badań: ${researchGoal}</div>
-        <div style="margin-bottom: 3mm;">3. Parametry pracy kąpieli w poszczególnych strefach:</div>
-        <div style="margin-bottom: 3mm;">${report.processName || 'Proces przygotowania powierzchni'}:</div>
-        
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 6mm; font-size: 9pt;">
-          <thead>
-            <tr>
-              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Strefa</th>
-              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Stęż. preparatu</th>
-              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Odczyn pH</th>
-              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Przewodność</th>
-              <th style="background-color: #e74c3c; color: white; text-align: center; padding: 1.5mm; border: 1px solid #ccc;">Temperatura</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${report.zones.map((zone, idx) => `
-              <tr>
-                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${idx + 1}. ${zone.product || '-'}</td>
-                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.concentration ? `${zone.concentration}%` : 'x'}</td>
-                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.ph || 'x'}</td>
-                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.conductivity ? `${zone.conductivity} µS/cm` : 'x'}</td>
-                <td style="padding: 1.5mm; border: 1px solid #ccc; text-align: center;">${zone.temperature ? `${zone.temperature}°C` : 'x'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        
-        <div style="margin-bottom: 3mm;">4. Rezultaty:</div>
-        
-        ${report.summary ? 
-          report.summary.split('\n').map(line => 
-            line.trim() ? `<div style="margin-left: 5mm; margin-bottom: 1mm;">• ${line.trim()}</div>` : ''
-          ).join('') : 
-          '<div style="margin-left: 5mm; margin-bottom: 1mm;">• Brak uwag co do utrzymywania parametrów roztworów kąpieli.</div>'
-        }
-        
-        <div style="margin-top: 15mm;">
+    // Check if there are photos
+    const hasPhotos = report.photos && report.photos.length > 0;
+    
+    // If no photos, add signature to first page
+    if (!hasPhotos) {
+      firstPageHtml += `
+        <!-- Signature -->
+        <div class="signature">
           Z poważaniem,<br>
           ${companyData.username || ""}<br>
           Doradca Techniczno-Handlowy
         </div>
+      `;
+    }
+    
+    firstPageHtml += `
+          <!-- Footer on each page -->
+          <div class="page-footer">
+            Haug Chemie®Polska HelpDesk
+          </div>
+          
+          <div class="page-number">Strona 1</div>
+        </div>
       </div>
     `;
     
-    // Przygotuj pełny HTML raportu z obsługą wielu stron
+    // Create photos page if needed
+    let photosPageHtml = '';
+    
+    if (hasPhotos) {
+      photosPageHtml = `
+        <div class="page-container photos-page">
+          <div class="letterhead">
+            <img src="${letterheadUrl}" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
+          </div>
+          
+          <div class="content">
+            <div class="section">
+              5. Dokumentacja fotograficzna:
+            </div>
+            
+            <div class="photos-grid">
+      `;
+      
+      // Add photos in a 2-column grid
+      for (let i = 0; i < report.photos.length; i++) {
+        const photo = report.photos[i];
+        photosPageHtml += `
+          <div class="photo-container">
+            <img src="${photo.url}" alt="Zdjęcie ${i+1}" class="photo-image">
+            <p class="photo-description">${photo.description || `Zdjęcie ${i+1}`}</p>
+          </div>
+        `;
+      }
+      
+      photosPageHtml += `
+            </div>
+            
+            <!-- Signature at the end -->
+            <div class="signature">
+              Z poważaniem,<br>
+              ${companyData.username || ""}<br>
+              Doradca Techniczno-Handlowy
+            </div>
+            
+            <!-- Footer -->
+            <div class="page-footer">
+              Haug Chemie®Polska HelpDesk
+            </div>
+            
+            <div class="page-number">Strona 2</div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Combine pages
     const reportHtml = `
       <html>
         <head>
@@ -989,17 +855,16 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
               font-family: 'Roboto', Arial, sans-serif;
               margin: 0;
               padding: 0;
-              font-size: 9.5pt;
               position: relative;
+              font-size: 10pt;
             }
-            .page {
+            .page-container {
               position: relative;
               width: 210mm;
               height: 297mm;
               page-break-after: always;
-              overflow: hidden;
             }
-            .page:last-of-type {
+            .page-container:last-child {
               page-break-after: auto;
             }
             .letterhead {
@@ -1007,17 +872,64 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
               top: 0;
               left: 0;
               width: 100%;
-              height: 100%;
+              height: 297mm;
               z-index: -1;
             }
-            .footer {
-              position: absolute;
-              bottom: 10mm;
-              left: 0;
-              width: 100%;
+            .content {
+              padding-top: 35mm;
+              padding-left: 20mm;
+              padding-right: 20mm;
+              padding-bottom: 40mm;
+              z-index: 1;
+            }
+            .header {
+              margin-bottom: 8mm;
+            }
+            .client-data {
+              margin-bottom: 4mm;
+            }
+            .date {
+              text-align: right;
+              margin-bottom: 8mm;
+            }
+            .report-title-box {
+              border: 1px solid black;
+              padding: 2mm;
               text-align: center;
-              font-size: 8pt;
-              color: #666;
+              margin-bottom: 4mm;
+            }
+            .report-date {
+              text-align: center;
+              margin-bottom: 8mm;
+            }
+            .section {
+              margin-bottom: 3mm;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 6mm;
+              font-size: 9pt;
+            }
+            th {
+              background-color: #e74c3c;
+              color: white;
+              font-weight: normal;
+              text-align: center;
+              padding: 1.5mm;
+              border: 1px solid #ccc;
+            }
+            td {
+              padding: 1.5mm;
+              border: 1px solid #ccc;
+              text-align: center;
+            }
+            .result-item {
+              margin-left: 5mm;
+              margin-bottom: 1mm;
+            }
+            .signature {
+              margin-top: 10mm;
             }
             .page-number {
               position: absolute;
@@ -1025,26 +937,45 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
               right: 20mm;
               font-size: 8pt;
             }
-            @page {
-              margin: 0;
+            .page-footer {
+              position: absolute;
+              bottom: 25mm;
+              left: 0;
+              width: 100%;
+              text-align: center;
+              font-size: 8pt;
+              color: #666;
+            }
+            .photos-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 10mm;
+              margin-top: 5mm;
+            }
+            .photo-container {
+              text-align: center;
+            }
+            .photo-image {
+              max-width: 100%;
+              max-height: 120mm;
+              object-fit: contain;
+              border: 1px solid #ddd;
+            }
+            .photo-description {
+              margin-top: 2mm;
+              font-style: italic;
+              font-size: 9pt;
             }
           </style>
         </head>
         <body>
-          <div class="page">
-            <div class="letterhead">
-              <img src="/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">
-            </div>
-            ${headerHtml}
-            ${contentHtml}
-            <div class="footer">Haug Chemie®Polska HelpDesk</div>
-            <div class="page-number">Strona 1</div>
-          </div>
+          ${firstPageHtml}
+          ${photosPageHtml}
         </body>
       </html>
     `;
     
-    // Konwersja HTML do PDF z obsługą wielu stron
+    // Convert HTML to PDF
     const element = document.createElement('div');
     element.innerHTML = reportHtml;
     document.body.appendChild(element);
@@ -1057,40 +988,15 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
         html2canvas: { 
           scale: 2, 
           useCORS: true,
-          windowWidth: 1024
+          logging: true,
+          letterRendering: true
         },
-        pagebreak: { 
-          mode: ['avoid-all', 'css', 'legacy'],
-          before: '.page-break',
-          after: '.page'
-        },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] },
         jsPDF: { 
           unit: 'mm', 
           format: 'a4', 
           orientation: 'portrait',
           compress: true
-        },
-        // Ustawia funkcję wywołania zwrotnego HTML2PDF dla dodawania nagłówka i stopki do każdej strony
-        html2canvas: {
-          onclone: function(doc) {
-            // Tutaj można zmodyfikować klonowany dokument przed renderowaniem
-            const pages = doc.querySelectorAll('.page');
-            pages.forEach((page, index) => {
-              // Aktualizacja numeru strony
-              const pageNumber = page.querySelector('.page-number');
-              if (pageNumber) {
-                pageNumber.textContent = `Strona ${index + 1}`;
-              }
-              
-              // Dodaj nowy papier firmowy do stron po pierwszej stronie
-              if (index > 0) {
-                const letterhead = doc.createElement('div');
-                letterhead.className = 'letterhead';
-                letterhead.innerHTML = `<img src="/papier-firmowy-1.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: -1;">`;
-                page.insertBefore(letterhead, page.firstChild);
-              }
-            });
-          }
         }
       };
       
@@ -1098,19 +1004,19 @@ async function generateMultiPageReportPDF(client, report, companyData = {}) {
       document.body.removeChild(element);
       return true;
     } catch (error) {
-      console.error("Błąd podczas generowania PDF:", error);
+      console.error("Error generating PDF:", error);
       document.body.removeChild(element);
-      return null;
+      throw error;
     }
   } catch (error) {
-    console.error("Błąd podczas przygotowywania raportu:", error);
+    console.error("Error preparing report:", error);
     return null;
   }
 }
 
-// Komponent ulepszonej tabeli stref - lepsze wyświetlanie i stylowanie
+// Enhanced zones table component - better display and styling
 function EnhancedZonesTable({ zones, onChange, products = [] }) {
-  // Dodaj dodatkowe style CSS dla poprawy wyświetlania tabeli
+  // Add extra CSS styles for improved table display
   const tableStyles = {
     container: {
       overflowX: 'auto',
@@ -1126,7 +1032,7 @@ function EnhancedZonesTable({ zones, onChange, products = [] }) {
     },
     headerCell: {
       padding: '10px',
-      backgroundColor: '#e74c3c', // Jasny czerwony kolor nagłówka
+      backgroundColor: '#e74c3c', // Light red header color
       color: 'white',
       textAlign: 'center',
       fontWeight: 'bold',
@@ -1153,7 +1059,7 @@ function EnhancedZonesTable({ zones, onChange, products = [] }) {
     }
   };
 
-  // Funkcja do aktualizacji danych strefy
+  // Function to update zone data
   const updateZoneData = (index, field, value) => {
     const updatedZones = [...zones];
     updatedZones[index] = {
@@ -1243,7 +1149,7 @@ function EnhancedZonesTable({ zones, onChange, products = [] }) {
   );
 }
 
-// Komponent notatek klienta
+// Client notes component
 function ClientNotes({ clientId, salesRepId }) {
   const [notes, setNotes] = useState([]);
   const [newNote, setNewNote] = useState('');
@@ -1251,13 +1157,13 @@ function ClientNotes({ clientId, salesRepId }) {
   const [expandedNotes, setExpandedNotes] = useState({});
   const [isLoading, setIsLoading] = useState(false);
 
-  // Pobierz notatki klienta
+  // Fetch client notes
   const fetchNotes = useCallback(async () => {
     if (!clientId) return;
     
     setIsLoading(true);
     try {
-      // Użyj poprawnej kolekcji i zapytania
+      // Use correct collection and query
       const q = query(
         collection(db, "notes"), 
         where("clientId", "==", clientId),
@@ -1274,23 +1180,23 @@ function ClientNotes({ clientId, salesRepId }) {
       
       setNotes(notesData);
     } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
+      console.error("Error fetching notes:", error);
     } finally {
       setIsLoading(false);
     }
   }, [clientId]);
 
-  // Efekt przy zmianie klienta
+  // Effect when client changes
   useEffect(() => {
     fetchNotes();
   }, [clientId, fetchNotes]);
 
-  // Dodaj nową notatkę
+  // Add new note
   const addNote = async () => {
     if (!newNote.trim() || !clientId) return;
     
     try {
-      // Dodaj notatkę do kolekcji notes w Firestore
+      // Add note to the notes collection in Firestore
       await addDoc(collection(db, "notes"), {
         clientId,
         salesRepId,
@@ -1300,14 +1206,14 @@ function ClientNotes({ clientId, salesRepId }) {
       });
       
       setNewNote('');
-      fetchNotes(); // Odśwież listę notatek
+      fetchNotes(); // Refresh notes list
     } catch (error) {
-      console.error("Błąd podczas dodawania notatki:", error);
-      alert("Wystąpił błąd podczas dodawania notatki. Spróbuj ponownie.");
+      console.error("Error adding note:", error);
+      alert("Error adding note. Please try again.");
     }
   };
 
-  // Aktualizuj notatkę
+  // Update note
   const updateNote = async () => {
     if (!editingNote || !editingNote.content.trim()) return;
     
@@ -1319,27 +1225,27 @@ function ClientNotes({ clientId, salesRepId }) {
       });
       
       setEditingNote(null);
-      fetchNotes(); // Odśwież listę notatek
+      fetchNotes(); // Refresh notes list
     } catch (error) {
-      console.error("Błąd podczas aktualizacji notatki:", error);
-      alert("Wystąpił błąd podczas aktualizacji notatki. Spróbuj ponownie.");
+      console.error("Error updating note:", error);
+      alert("Error updating note. Please try again.");
     }
   };
 
-  // Usuń notatkę
+  // Delete note
   const deleteNote = async (noteId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
     
     try {
       await deleteDoc(doc(db, "notes", noteId));
-      fetchNotes(); // Odśwież listę notatek
+      fetchNotes(); // Refresh notes list
     } catch (error) {
-      console.error("Błąd podczas usuwania notatki:", error);
-      alert("Wystąpił błąd podczas usuwania notatki. Spróbuj ponownie.");
+      console.error("Error deleting note:", error);
+      alert("Error deleting note. Please try again.");
     }
   };
 
-  // Przełącz rozwinięcie notatki
+  // Toggle note expansion
   const toggleNoteExpand = (noteId) => {
     setExpandedNotes(prev => ({
       ...prev,
@@ -1347,7 +1253,7 @@ function ClientNotes({ clientId, salesRepId }) {
     }));
   };
 
-  // Formatuj datę
+  // Format date
   const formatNoteDate = (date) => {
     if (!date) return '';
     return date.toLocaleDateString('pl-PL', {
@@ -1471,7 +1377,176 @@ function ClientNotes({ clientId, salesRepId }) {
   );
 }
 
-// Ekran logowania
+// Photo Upload Component for Reports
+function PhotoUpload({ photos = [], onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+
+  // Handle file selection
+  const handleFileChange = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    setUploading(true);
+    
+    try {
+      // Upload files one by one
+      const newPhotos = [...photos];
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        
+        // Create storage reference
+        const storageRef = ref(storage, `report-photos/${Date.now()}_${file.name}`);
+        
+        // Upload file
+        const snapshot = await uploadBytes(storageRef, file);
+        
+        // Get download URL
+        const url = await getDownloadURL(snapshot.ref);
+        
+        // Add to photos array
+        newPhotos.push({
+          url,
+          path: snapshot.ref.fullPath,
+          description: '',
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // Update parent component
+      onChange(newPhotos);
+      
+    } catch (error) {
+      console.error("Error uploading photos:", error);
+      alert("Error uploading photos. Please try again.");
+    } finally {
+      setUploading(false);
+      
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      if (cameraInputRef.current) {
+        cameraInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Update photo description
+  const updatePhotoDescription = (index, description) => {
+    const updatedPhotos = [...photos];
+    updatedPhotos[index] = {
+      ...updatedPhotos[index],
+      description
+    };
+    onChange(updatedPhotos);
+  };
+
+  // Remove photo
+  const removePhoto = async (index) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć to zdjęcie?")) return;
+    
+    try {
+      const photo = photos[index];
+      
+      // Delete from Firebase Storage if path exists
+      if (photo.path) {
+        const photoRef = ref(storage, photo.path);
+        await deleteObject(photoRef);
+      }
+      
+      // Remove from array
+      const updatedPhotos = [...photos];
+      updatedPhotos.splice(index, 1);
+      onChange(updatedPhotos);
+      
+    } catch (error) {
+      console.error("Error deleting photo:", error);
+      alert("Error deleting photo. Please try again.");
+    }
+  };
+
+  return (
+    <div className="photo-upload-container mt-6">
+      <h4 className="text-lg font-semibold mb-3">Zdjęcia raportu</h4>
+      
+      <div className="upload-buttons mb-4 flex flex-wrap gap-2">
+        <button
+          className="btn btn-secondary"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+        >
+          {uploading ? 'Przesyłanie...' : 'Dodaj zdjęcie z galerii'}
+        </button>
+        
+        <button
+          className="btn btn-secondary"
+          onClick={() => cameraInputRef.current?.click()}
+          disabled={uploading}
+        >
+          {uploading ? 'Przesyłanie...' : 'Zrób zdjęcie aparatem'}
+        </button>
+        
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept="image/*"
+          multiple
+          onChange={handleFileChange}
+          style={{ display: 'none' }}
+        />
+        
+        <input
+          type="file"
+          ref={cameraInputRef}
+          accept="image/*"
+          capture="environment"
+          onChange={handleFileChange}
+          style={{ display: 'none' }}
+        />
+      </div>
+      
+      {photos.length > 0 && (
+        <div className="photos-grid grid grid-cols-1 md:grid-cols-2 gap-4">
+          {photos.map((photo, index) => (
+            <div key={index} className="photo-item bg-white p-3 border rounded">
+              <div className="photo-preview mb-2">
+                <img 
+                  src={photo.url} 
+                  alt={`Zdjęcie ${index + 1}`} 
+                  className="w-full h-48 object-contain"
+                />
+              </div>
+              
+              <div className="photo-description">
+                <textarea
+                  className="w-full p-2 border rounded mb-2"
+                  placeholder="Opis zdjęcia..."
+                  value={photo.description || ''}
+                  onChange={(e) => updatePhotoDescription(index, e.target.value)}
+                  rows={2}
+                ></textarea>
+              </div>
+              
+              <div className="photo-actions text-right">
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={() => removePhoto(index)}
+                >
+                  Usuń zdjęcie
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Login Screen
 function LoginScreen() {
   const [credentials, setCredentials] = useState({ email: '', password: '' });
   const [error, setError] = useState('');
@@ -1489,10 +1564,10 @@ function LoginScreen() {
     
     try {
       await signInWithEmailAndPassword(auth, credentials.email, credentials.password);
-      // Obsługa logowania przekazana jest do funkcji zwrotnej onAuthStateChanged w komponencie App
+      // Login handling is passed to the onAuthStateChanged callback in the App component
       setLoading(false);
     } catch (error) {
-      console.error('Błąd logowania:', error);
+      console.error('Login error:', error);
       setError('Nieprawidłowy email lub hasło');
       setLoading(false);
     }
@@ -1552,7 +1627,7 @@ function LoginScreen() {
   );
 }
 
-// Kalkulator zużycia chemii
+// Chemical Consumption Calculator
 function ChemicalConsumptionCalculator({ products }) {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [area, setArea] = useState('');
@@ -1650,7 +1725,7 @@ function ChemicalConsumptionCalculator({ products }) {
   );
 }
 
-// Kalkulator objętości dla eska®strip H 365A
+// Volume Calculator for eska®strip H 365A
 function VolumeCalculator() {
   const [tankVolume, setTankVolume] = useState('');
   const [result, setResult] = useState(null);
@@ -1723,7 +1798,7 @@ function VolumeCalculator() {
   );
 }
 
-// Kalkulator uzupełniania stężenia chemii
+// Concentration Calculator
 function ConcentrationCalculator({ products }) {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [currentConcentration, setCurrentConcentration] = useState('');
@@ -1844,7 +1919,7 @@ function ConcentrationCalculator({ products }) {
   );
 }
 
-// Selektor chłodziw
+// Coolant Selector
 function CoolantSelector() {
   const [waterHardness, setWaterHardness] = useState('');
   const [selectedMaterials, setSelectedMaterials] = useState([]);
@@ -1939,8 +2014,8 @@ function CoolantSelector() {
           lubricationScore += getSuitabilityScore(coolant.lubricationEfficiency[lubricationId]);
         });
       } else {
-        // Domyślny wynik dla smarowania jeśli nie wybrano
-        lubricationScore = 2 * 3; // średni wynik × 3 poziomy
+        // Default score for lubrication if not selected
+        lubricationScore = 2 * 3; // average score × 3 levels
       }
       
       const totalScore = isHardnessInRange ? (materialScore + operationScore + lubricationScore) : 0;
@@ -2188,7 +2263,7 @@ function CoolantSelector() {
   );
 }
 
-// Panel handlowca z rozszerzonymi funkcjami
+// Sales Representative Panel with extended functions
 function SalesRepPanel({ currentUser, products }) {
   const [clients, setClients] = useState([]);
   const [filteredClients, setFilteredClients] = useState([]);
@@ -2198,7 +2273,7 @@ function SalesRepPanel({ currentUser, products }) {
   const [newReport, setNewReport] = useState({
     date: new Date().toISOString().split('T')[0],
     processName: '',
-    researchGoal: 'Kontrola parametrów procesów.',  // Dodany domyślny cel badań
+    researchGoal: 'Kontrola parametrów procesów.',
     summary: '',
     zones: Array(7).fill().map(() => ({
       product: '',
@@ -2206,8 +2281,10 @@ function SalesRepPanel({ currentUser, products }) {
       conductivity: '',
       temperature: '',
       ph: ''
-    }))
+    })),
+    photos: []
   });
+  const [editingReport, setEditingReport] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddClientModal, setShowAddClientModal] = useState(false);
   const [showEditClientModal, setShowEditClientModal] = useState(false);
@@ -2223,7 +2300,7 @@ function SalesRepPanel({ currentUser, products }) {
   const [editClientData, setEditClientData] = useState(null);
   const [activeTab, setActiveTab] = useState('reports');
   
-  // Pobierz klientów z Firebase - używając useCallback
+  // Fetch clients from Firebase - using useCallback
   const fetchClients = useCallback(async () => {
     try {
       const q = query(collection(db, "clients"), where("salesRepId", "==", currentUser?.id));
@@ -2235,11 +2312,11 @@ function SalesRepPanel({ currentUser, products }) {
       setClients(clientsData);
       setFilteredClients(clientsData);
     } catch (error) {
-      console.error("Błąd podczas pobierania klientów:", error);
+      console.error("Error fetching clients:", error);
     }
   }, [currentUser?.id]);
           
-  // Pobierz raporty dla wybranego klienta
+  // Fetch reports for selected client
   const fetchReports = useCallback(async (clientId) => {
     try {
       const q = query(collection(db, "reports"), where("clientId", "==", clientId));
@@ -2249,16 +2326,16 @@ function SalesRepPanel({ currentUser, products }) {
         ...doc.data()
       }));
       
-      // Sortuj raporty od najnowszego
+      // Sort reports from newest
       reportsData.sort((a, b) => new Date(b.date) - new Date(a.date));
       
       setReports(reportsData);
     } catch (error) {
-      console.error("Błąd podczas pobierania raportów:", error);
+      console.error("Error fetching reports:", error);
     }
   }, []);
 
-  // Pobierz notatki dla wybranego klienta
+  // Fetch notes for selected client
   const fetchNotes = useCallback(async (clientId) => {
     try {
       const q = query(
@@ -2275,18 +2352,18 @@ function SalesRepPanel({ currentUser, products }) {
       
       setNotes(notesData);
     } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
+      console.error("Error fetching notes:", error);
     }
   }, []);
   
-  // Efekt przy pierwszym ładowaniu
+  // Effect on first load
   useEffect(() => {
     if (currentUser) {
       fetchClients();
     }
   }, [currentUser, fetchClients]);
   
-  // Efekt przy zmianie wybranego klienta
+  // Effect when selected client changes
   useEffect(() => {
     if (selectedClient) {
       fetchReports(selectedClient.id);
@@ -2294,7 +2371,7 @@ function SalesRepPanel({ currentUser, products }) {
     }
   }, [selectedClient, fetchReports, fetchNotes]);
   
-  // Efekt przy zmianie wyszukiwania
+  // Effect when search term changes
   useEffect(() => {
     if (searchTerm.trim() === '') {
       setFilteredClients(clients);
@@ -2307,7 +2384,7 @@ function SalesRepPanel({ currentUser, products }) {
     }
   }, [searchTerm, clients]);
 
-  // Dodaj nowego klienta z pełnymi danymi
+  // Add new client with full data
   const addClient = async () => {
     if (newClientData.name.trim() === '') return;
     
@@ -2330,11 +2407,11 @@ function SalesRepPanel({ currentUser, products }) {
       });
       setShowAddClientModal(false);
     } catch (error) {
-      console.error("Błąd podczas dodawania klienta:", error);
+      console.error("Error adding client:", error);
     }
   };
   
-  // Edytuj dane klienta
+  // Edit client data
   const editClient = async () => {
     if (!editClientData || editClientData.name.trim() === '') return;
     
@@ -2351,7 +2428,7 @@ function SalesRepPanel({ currentUser, products }) {
         updatedAt: new Date().toISOString()
       });
       
-      // Odśwież dane klienta
+      // Refresh client data
       fetchClients();
       if (selectedClient && selectedClient.id === editClientData.id) {
         setSelectedClient({
@@ -2363,36 +2440,36 @@ function SalesRepPanel({ currentUser, products }) {
       setShowEditClientModal(false);
       setEditClientData(null);
     } catch (error) {
-      console.error("Błąd podczas edycji klienta:", error);
+      console.error("Error editing client:", error);
     }
   };
   
-  // Usuń klienta
+  // Delete client
   const deleteClient = async (clientId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć tego klienta? Ta operacja jest nieodwracalna.")) {
       return;
     }
     
     try {
-      // Usuń klienta
+      // Delete client
       await deleteDoc(doc(db, "clients", clientId));
       
-      // Odśwież listę klientów
+      // Refresh client list
       fetchClients();
       
-      // Jeśli usunięty klient był wybrany, zresetuj wybór
+      // If the deleted client was selected, reset selection
       if (selectedClient && selectedClient.id === clientId) {
         setSelectedClient(null);
         setReports([]);
         setNotes([]);
       }
     } catch (error) {
-      console.error("Błąd podczas usuwania klienta:", error);
+      console.error("Error deleting client:", error);
       alert("Wystąpił błąd podczas usuwania klienta");
     }
   };
   
-  // Dodaj nowy raport z podsumowaniem
+  // Add new report with summary
   const addReport = async () => {
     if (!selectedClient) return;
     
@@ -2414,12 +2491,13 @@ function SalesRepPanel({ currentUser, products }) {
         researchGoal: newReport.researchGoal,
         summary: newReport.summary,
         zones: filledZones,
+        photos: newReport.photos || [],
         createdAt: new Date().toISOString()
       });
       
       fetchReports(selectedClient.id);
       
-      // Resetuj formularz
+      // Reset form
       setNewReport({
         date: new Date().toISOString().split('T')[0],
         processName: '',
@@ -2431,58 +2509,168 @@ function SalesRepPanel({ currentUser, products }) {
           conductivity: '',
           temperature: '',
           ph: ''
-        }))
+        })),
+        photos: []
       });
     } catch (error) {
-      console.error("Błąd podczas dodawania raportu:", error);
+      console.error("Error adding report:", error);
     }
   };
   
-  // Usuń raport
+  // Update report
+  const updateReport = async () => {
+    if (!editingReport || !selectedClient) return;
+    
+    const filledZones = editingReport.zones.filter(zone => 
+      zone.product || zone.concentration || zone.conductivity || zone.temperature || zone.ph
+    );
+    
+    if (filledZones.length === 0) {
+      alert("Wypełnij dane dla co najmniej jednej strefy");
+      return;
+    }
+    
+    try {
+      const reportRef = doc(db, "reports", editingReport.id);
+      await updateDoc(reportRef, {
+        date: editingReport.date,
+        processName: editingReport.processName,
+        researchGoal: editingReport.researchGoal,
+        summary: editingReport.summary,
+        zones: filledZones,
+        photos: editingReport.photos || [],
+        updatedAt: new Date().toISOString()
+      });
+      
+      fetchReports(selectedClient.id);
+      setEditingReport(null);
+    } catch (error) {
+      console.error("Error updating report:", error);
+    }
+  };
+  
+  // Delete report
   const deleteReport = async (reportId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
       return;
     }
     
     try {
+      // First, get the report to get photo references
+      const reportDoc = await getDoc(doc(db, "reports", reportId));
+      if (reportDoc.exists()) {
+        const reportData = reportDoc.data();
+        
+        // Delete photos from storage if they exist
+        if (reportData.photos && reportData.photos.length > 0) {
+          for (const photo of reportData.photos) {
+            if (photo.path) {
+              try {
+                const photoRef = ref(storage, photo.path);
+                await deleteObject(photoRef);
+              } catch (photoError) {
+                console.error("Error deleting photo:", photoError);
+                // Continue with deleting other photos
+              }
+            }
+          }
+        }
+      }
+      
+      // Delete report document
       await deleteDoc(doc(db, "reports", reportId));
       
-      // Odśwież listę raportów
+      // Refresh reports list
       if (selectedClient) {
         fetchReports(selectedClient.id);
       }
     } catch (error) {
-      console.error("Błąd podczas usuwania raportu:", error);
+      console.error("Error deleting report:", error);
       alert("Wystąpił błąd podczas usuwania raportu");
     }
   };
   
-  // Aktualizacja danych stref
+  // Set report for editing
+  const editReport = (report) => {
+    setEditingReport({
+      ...report,
+      zones: report.zones.length < 7 
+        ? [...report.zones, ...Array(7 - report.zones.length).fill().map(() => ({
+            product: '',
+            concentration: '',
+            conductivity: '',
+            temperature: '',
+            ph: ''
+          }))]
+        : report.zones
+    });
+  };
+  
+  // Cancel editing
+  const cancelEditReport = () => {
+    setEditingReport(null);
+  };
+  
+  // Update zones data
   const updateZones = (updatedZones) => {
     setNewReport({
       ...newReport,
       zones: updatedZones
     });
   };
+  
+  // Update zones for editing report
+  const updateEditingZones = (updatedZones) => {
+    setEditingReport({
+      ...editingReport,
+      zones: updatedZones
+    });
+  };
+  
+  // Update photos for new report
+  const updatePhotos = (photos) => {
+    setNewReport({
+      ...newReport,
+      photos
+    });
+  };
+  
+  // Update photos for editing report
+  const updateEditingPhotos = (photos) => {
+    setEditingReport({
+      ...editingReport,
+      photos
+    });
+  };
 
-  // Generowanie raportów PDF
+  // Generating PDF reports
   const generatePDF = async () => {
     if (!selectedClient) return;
     await generateClientReport(selectedClient, reports, notes);
   };
   
-  // Generuj raport PDF na firmowym papierze
+  // Generate company letterhead PDF report
   const generateCompanyPDF = async (report) => {
     if (!selectedClient || !report) return;
-    await generateCompanyReportPDF(selectedClient, report, {
-      username: currentUser.username
-    });
+    try {
+      await generateCompanyReportPDF(selectedClient, report, {
+        username: currentUser.username
+      });
+    } catch (error) {
+      console.error("Error generating company PDF:", error);
+      alert("Wystąpił problem z generowaniem raportu. Sprawdź czy obrazy są dostępne.");
+    }
   };
   
-  // Generuj standardowy raport PDF
+  // Generate standard PDF report
   const generateSinglePDF = async (report) => {
     if (!selectedClient || !report) return;
-    await generateSingleReportPDF(selectedClient, report);
+    try {
+      await generateSingleReportPDF(selectedClient, report);
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      alert("Wystąpił problem z generowaniem raportu. Sprawdź czy obrazy są dostępne.");
+    }
   };
   
   return (
@@ -2603,69 +2791,153 @@ function SalesRepPanel({ currentUser, products }) {
               
               {activeTab === 'reports' && (
                 <>
-                  <div className="report-form">
-                    <h4 className="text-lg font-semibold mb-3">Nowy Raport</h4>
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Data wizyty</label>
-                      <input
-                        type="date"
-                        className="input-field"
-                        value={newReport.date}
-                        onChange={(e) => setNewReport({...newReport, date: e.target.value})}
+                  {editingReport ? (
+                    <div className="report-form">
+                      <h4 className="text-lg font-semibold mb-3">Edytuj Raport</h4>
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Data wizyty</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={editingReport.date}
+                          onChange={(e) => setEditingReport({...editingReport, date: e.target.value})}
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Nazwa procesu (opcjonalnie)</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          value={editingReport.processName || ''}
+                          onChange={(e) => setEditingReport({...editingReport, processName: e.target.value})}
+                          placeholder="np. Proces przygotowania stali czarnej"
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Cel badań</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          value={editingReport.researchGoal || 'Kontrola parametrów procesów.'}
+                          onChange={(e) => setEditingReport({...editingReport, researchGoal: e.target.value})}
+                          placeholder="Cel badań"
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Parametry pracy kąpieli w poszczególnych strefach:</label>
+                        <EnhancedZonesTable 
+                          zones={editingReport.zones}
+                          onChange={updateEditingZones}
+                          products={products}
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Podsumowanie raportu (opcjonalnie)</label>
+                        <textarea
+                          className="input-field w-full"
+                          rows="4"
+                          value={editingReport.summary || ''}
+                          onChange={(e) => setEditingReport({...editingReport, summary: e.target.value})}
+                          placeholder="Wprowadź podsumowanie, np. uwagi dotyczące stanu kąpieli, zalecenia..."
+                        ></textarea>
+                      </div>
+                      
+                      {/* Photo upload section for editing */}
+                      <PhotoUpload 
+                        photos={editingReport.photos || []} 
+                        onChange={updateEditingPhotos} 
                       />
+                      
+                      <div className="form-actions mt-4 flex space-x-2">
+                        <button
+                          className="btn btn-secondary"
+                          onClick={cancelEditReport}
+                        >
+                          Anuluj
+                        </button>
+                        <button
+                          className="btn btn-primary"
+                          onClick={updateReport}
+                        >
+                          Zapisz zmiany
+                        </button>
+                      </div>
                     </div>
-                    
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Nazwa procesu (opcjonalnie)</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={newReport.processName}
-                        onChange={(e) => setNewReport({...newReport, processName: e.target.value})}
-                        placeholder="np. Proces przygotowania stali czarnej"
+                  ) : (
+                    <div className="report-form">
+                      <h4 className="text-lg font-semibold mb-3">Nowy Raport</h4>
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Data wizyty</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={newReport.date}
+                          onChange={(e) => setNewReport({...newReport, date: e.target.value})}
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Nazwa procesu (opcjonalnie)</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          value={newReport.processName}
+                          onChange={(e) => setNewReport({...newReport, processName: e.target.value})}
+                          placeholder="np. Proces przygotowania stali czarnej"
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Cel badań</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          value={newReport.researchGoal}
+                          onChange={(e) => setNewReport({...newReport, researchGoal: e.target.value})}
+                          placeholder="Cel badań"
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Parametry pracy kąpieli w poszczególnych strefach:</label>
+                        <EnhancedZonesTable 
+                          zones={newReport.zones}
+                          onChange={updateZones}
+                          products={products}
+                        />
+                      </div>
+                      
+                      <div className="form-row mb-4">
+                        <label className="block mb-1">Podsumowanie raportu (opcjonalnie)</label>
+                        <textarea
+                          className="input-field w-full"
+                          rows="4"
+                          value={newReport.summary}
+                          onChange={(e) => setNewReport({...newReport, summary: e.target.value})}
+                          placeholder="Wprowadź podsumowanie, np. uwagi dotyczące stanu kąpieli, zalecenia..."
+                        ></textarea>
+                      </div>
+                      
+                      {/* Photo upload section */}
+                      <PhotoUpload 
+                        photos={newReport.photos} 
+                        onChange={updatePhotos} 
                       />
+                      
+                      <div className="form-actions mt-4">
+                        <button
+                          className="btn btn-primary"
+                          onClick={addReport}
+                        >
+                          Zapisz raport
+                        </button>
+                      </div>
                     </div>
-                    
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Cel badań</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={newReport.researchGoal}
-                        onChange={(e) => setNewReport({...newReport, researchGoal: e.target.value})}
-                        placeholder="Cel badań"
-                      />
-                    </div>
-                    
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Parametry pracy kąpieli w poszczególnych strefach:</label>
-                      <EnhancedZonesTable 
-                        zones={newReport.zones}
-                        onChange={updateZones}
-                        products={products}
-                      />
-                    </div>
-                    
-                    <div className="form-row mb-4">
-                      <label className="block mb-1">Podsumowanie raportu (opcjonalnie)</label>
-                      <textarea
-                        className="input-field w-full"
-                        rows="4"
-                        value={newReport.summary}
-                        onChange={(e) => setNewReport({...newReport, summary: e.target.value})}
-                        placeholder="Wprowadź podsumowanie, np. uwagi dotyczące stanu kąpieli, zalecenia..."
-                      ></textarea>
-                    </div>
-                    
-                    <div className="form-actions mt-4">
-                      <button
-                        className="btn btn-primary"
-                        onClick={addReport}
-                      >
-                        Zapisz raport
-                      </button>
-                    </div>
-                  </div>
+                  )}
                   
                   <div className="reports-history mt-6">
                     <h4 className="text-lg font-semibold mb-3">Historia raportów</h4>
@@ -2678,8 +2950,14 @@ function SalesRepPanel({ currentUser, products }) {
                             <div className="report-header mb-3 flex justify-between items-center">
                               <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
                               
-                              {/* Przyciski do generowania PDF i usuwania raportu */}
+                              {/* Buttons for generating PDF and deleting report */}
                               <div className="flex space-x-2">
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => editReport(report)}
+                                >
+                                  Edytuj
+                                </button>
                                 <button
                                   className="btn btn-secondary btn-sm"
                                   onClick={() => generateSinglePDF(report)}
@@ -2736,6 +3014,27 @@ function SalesRepPanel({ currentUser, products }) {
                               </table>
                             </div>
                             
+                            {/* Display photos if present */}
+                            {report.photos && report.photos.length > 0 && (
+                              <div className="mt-3">
+                                <strong>Zdjęcia:</strong>
+                                <div className="grid grid-cols-2 gap-2 mt-2">
+                                  {report.photos.map((photo, idx) => (
+                                    <div key={idx} className="photo-preview">
+                                      <img 
+                                        src={photo.url} 
+                                        alt={`Zdjęcie ${idx + 1}`} 
+                                        className="w-full h-40 object-contain border rounded"
+                                      />
+                                      {photo.description && (
+                                        <p className="text-sm mt-1 text-gray-600">{photo.description}</p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            
                             {report.summary && (
                               <div className="mt-3">
                                 <strong>Podsumowanie:</strong>
@@ -2765,7 +3064,7 @@ function SalesRepPanel({ currentUser, products }) {
         </div>
       </div>
       
-      {/* Modal dodawania klienta z rozszerzonymi polami */}
+      {/* Modal for adding client with extended fields */}
       {showAddClientModal && (
         <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
@@ -2867,7 +3166,7 @@ function SalesRepPanel({ currentUser, products }) {
         </div>
       )}
       
-      {/* Modal edycji klienta */}
+      {/* Modal for editing client */}
       {showEditClientModal && editClientData && (
         <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
@@ -2975,230 +3274,7 @@ function SalesRepPanel({ currentUser, products }) {
   );
 }
 
-// Komponent zarządzania raportami dla administratora
-function ReportsManagement() {
-  const [reports, setReports] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [clientsMap, setClientsMap] = useState({});
-  const [salesRepsMap, setSalesRepsMap] = useState({});
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState({ startDate: '', endDate: '' });
-  const [currentPage, setCurrentPage] = useState(1);
-  const reportsPerPage = 10;
-  
-  // Pobierz wszystkie raporty z systemu
-  const fetchAllReports = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      // Pobierz wszystkich klientów, aby uzyskać mapę id->nazwa
-      const clientsSnapshot = await getDocs(collection(db, "clients"));
-      const clientsData = {};
-      clientsSnapshot.docs.forEach(doc => {
-        clientsData[doc.id] = doc.data().name;
-      });
-      setClientsMap(clientsData);
-      
-      // Pobierz wszystkich handlowców, aby uzyskać mapę id->nazwa
-      const salesRepsSnapshot = await getDocs(collection(db, "users"));
-      const salesRepsData = {};
-      salesRepsSnapshot.docs.forEach(doc => {
-        salesRepsData[doc.id] = doc.data().username;
-      });
-      setSalesRepsMap(salesRepsData);
-      
-      // Pobierz wszystkie raporty, posortowane od najnowszego
-      const q = query(
-        collection(db, "reports"),
-        orderBy("date", "desc")
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const reportsData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        clientName: clientsData[doc.data().clientId] || "Nieznany klient",
-        salesRepName: salesRepsData[doc.data().salesRepId] || "Nieznany handlowiec"
-      }));
-      
-      setReports(reportsData);
-    } catch (error) {
-      console.error("Błąd podczas pobierania raportów:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-  
-  // Efekt przy ładowaniu komponentu
-  useEffect(() => {
-    fetchAllReports();
-  }, [fetchAllReports]);
-  
-  // Funkcja do filtrowania raportów
-  const getFilteredReports = useCallback(() => {
-    return reports.filter(report => {
-      // Filtrowanie po wyszukiwanym tekście
-      const matchesSearch = searchTerm.trim() === '' || 
-        report.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        report.salesRepName.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      // Filtrowanie po zakresie dat
-      let matchesDate = true;
-      if (dateFilter.startDate) {
-        matchesDate = matchesDate && new Date(report.date) >= new Date(dateFilter.startDate);
-      }
-      if (dateFilter.endDate) {
-        matchesDate = matchesDate && new Date(report.date) <= new Date(dateFilter.endDate);
-      }
-      
-      return matchesSearch && matchesDate;
-    });
-  }, [reports, searchTerm, dateFilter]);
-  
-  // Pobranie odfiltrowanych i posortowanych raportów
-  const filteredReports = getFilteredReports();
-  
-  // Wyliczenie aktualnej strony raportów (paginacja)
-  const indexOfLastReport = currentPage * reportsPerPage;
-  const indexOfFirstReport = indexOfLastReport - reportsPerPage;
-  const currentReports = filteredReports.slice(indexOfFirstReport, indexOfLastReport);
-  const totalPages = Math.ceil(filteredReports.length / reportsPerPage);
-  
-  // Zmiana strony
-  const paginate = (pageNumber) => setCurrentPage(pageNumber);
-  
-  // Usuń raport
-  const deleteReport = async (reportId) => {
-    if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
-      return;
-    }
-    
-    try {
-      await deleteDoc(doc(db, "reports", reportId));
-      fetchAllReports(); // Odśwież listę raportów
-    } catch (error) {
-      console.error("Błąd podczas usuwania raportu:", error);
-      alert("Wystąpił błąd podczas usuwania raportu");
-    }
-  };
-  
-  return (
-    <div className="tile">
-      <div className="tile-header">
-        <h2 className="tile-title">Zarządzanie Raportami</h2>
-      </div>
-      
-      {/* Filtry */}
-      <div className="filters-container mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label className="block mb-1">Wyszukaj</label>
-          <input
-            type="text"
-            className="input-field w-full"
-            placeholder="Wyszukaj po nazwie klienta lub handlowca..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-        
-        <div>
-          <label className="block mb-1">Data od</label>
-          <input
-            type="date"
-            className="input-field w-full"
-            value={dateFilter.startDate}
-            onChange={(e) => setDateFilter({...dateFilter, startDate: e.target.value})}
-          />
-        </div>
-        
-        <div>
-          <label className="block mb-1">Data do</label>
-          <input
-            type="date"
-            className="input-field w-full"
-            value={dateFilter.endDate}
-            onChange={(e) => setDateFilter({...dateFilter, endDate: e.target.value})}
-          />
-        </div>
-      </div>
-      
-      {isLoading ? (
-        <div className="loading-container p-8 text-center">
-          <p>Ładowanie raportów...</p>
-        </div>
-      ) : filteredReports.length === 0 ? (
-        <div className="no-reports p-8 text-center">
-          <p>Brak raportów spełniających kryteria wyszukiwania</p>
-        </div>
-      ) : (
-        <>
-          <div className="reports-list overflow-x-auto">
-            <table className="data-table w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="p-3 border">Nr raportu</th>
-                  <th className="p-3 border">Data</th>
-                  <th className="p-3 border">Klient</th>
-                  <th className="p-3 border">Handlowiec</th>
-                  <th className="p-3 border">Proces</th>
-                  <th className="p-3 border">Cel badań</th>
-                  <th className="p-3 border">Akcje</th>
-                </tr>
-              </thead>
-              <tbody>
-                {currentReports.map((report, index) => {
-                  const reportDate = new Date(report.date);
-                  const reportYear = reportDate.getFullYear();
-                  // Wyliczamy numer raportu (index + 1 w aktualnym roku)
-                  const reportNumber = `${index + 1 + (currentPage - 1) * reportsPerPage}/ANL/${reportYear}`;
-                  
-                  return (
-                    <tr key={report.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="p-3 border text-center font-semibold">{reportNumber}</td>
-                      <td className="p-3 border">{new Date(report.date).toLocaleDateString('pl-PL')}</td>
-                      <td className="p-3 border">{report.clientName}</td>
-                      <td className="p-3 border">{report.salesRepName}</td>
-                      <td className="p-3 border">{report.processName || '-'}</td>
-                      <td className="p-3 border">{report.researchGoal || 'Kontrola parametrów procesów.'}</td>
-                      <td className="p-3 border">
-                        <div className="flex justify-center space-x-2">
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => deleteReport(report.id)}
-                          >
-                            Usuń
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          
-          {/* Paginacja */}
-          {totalPages > 1 && (
-            <div className="pagination mt-6 flex justify-center">
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNumber => (
-                <button
-                  key={pageNumber}
-                  className={`pagination-item mx-1 px-3 py-1 border ${
-                    currentPage === pageNumber ? 'bg-blue-500 text-white' : 'bg-white'
-                  }`}
-                  onClick={() => paginate(pageNumber)}
-                >
-                  {pageNumber}
-                </button>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// Zarządzanie użytkownikami (Admin Panel)
+// User Management (Admin Panel)
 function UserManagement() {
   const [users, setUsers] = useState([]);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
@@ -3211,7 +3287,7 @@ function UserManagement() {
   });
   const [editingUser, setEditingUser] = useState(null);
   
-  // Pobierz użytkowników z Firestore
+  // Fetch users from Firestore
   const fetchUsers = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "users"));
@@ -3222,12 +3298,12 @@ function UserManagement() {
       
       setUsers(usersData);
     } catch (error) {
-      console.error("Błąd podczas pobierania użytkowników:", error);
+      console.error("Error fetching users:", error);
       setUsers([]);
     }
   }, []);
   
-  // Dodaj nowego użytkownika
+  // Add new user
   const addUser = async () => {
     if (!newUser.username || !newUser.email || !newUser.password) {
       alert("Wypełnij wszystkie pola");
@@ -3235,11 +3311,11 @@ function UserManagement() {
     }
     
     try {
-      // Utwórz konto użytkownika w Firebase Auth
+      // Create user account in Firebase Auth
       const userCredential = await createUserWithEmailAndPassword(auth, newUser.email, newUser.password);
       const uid = userCredential.user.uid;
       
-      // Dodaj dane użytkownika do Firestore
+      // Add user data to Firestore
       await setDoc(doc(db, "users", uid), {
         username: newUser.username,
         email: newUser.email,
@@ -3247,10 +3323,10 @@ function UserManagement() {
         createdAt: new Date().toISOString()
       });
       
-      // Odśwież listę użytkowników
+      // Refresh users list
       fetchUsers();
       
-      // Zamknij modal i wyczyść formularz
+      // Close modal and clear form
       setShowAddUserModal(false);
       setNewUser({
         username: '',
@@ -3260,12 +3336,12 @@ function UserManagement() {
       });
       
     } catch (error) {
-      console.error("Błąd podczas dodawania użytkownika:", error);
+      console.error("Error adding user:", error);
       alert(`Błąd: ${error.message}`);
     }
   };
   
-  // Aktualizuj użytkownika
+  // Update user
   const updateUser = async () => {
     if (!editingUser || !editingUser.username || !editingUser.email) {
       alert("Wypełnij wszystkie pola");
@@ -3273,7 +3349,7 @@ function UserManagement() {
     }
     
     try {
-      // Aktualizuj dane użytkownika w Firestore
+      // Update user data in Firestore
       const userRef = doc(db, "users", editingUser.id);
       await updateDoc(userRef, {
         username: editingUser.username,
@@ -3281,39 +3357,39 @@ function UserManagement() {
         updatedAt: new Date().toISOString()
       });
       
-      // Odśwież listę użytkowników
+      // Refresh users list
       fetchUsers();
       
-      // Zamknij modal i wyczyść stan
+      // Close modal and clear state
       setShowEditUserModal(false);
       setEditingUser(null);
       
     } catch (error) {
-      console.error("Błąd podczas aktualizacji użytkownika:", error);
+      console.error("Error updating user:", error);
       alert(`Błąd: ${error.message}`);
     }
   };
   
-  // Usuń użytkownika
+  // Delete user
   const deleteUser = async (userId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć tego użytkownika?")) {
       return;
     }
     
     try {
-      // Usuń dane użytkownika z Firestore
+      // Delete user data from Firestore
       await deleteDoc(doc(db, "users", userId));
       
-      // Odśwież listę użytkowników
+      // Refresh users list
       fetchUsers();
       
     } catch (error) {
-      console.error("Błąd podczas usuwania użytkownika:", error);
+      console.error("Error deleting user:", error);
       alert(`Błąd: ${error.message}`);
     }
   };
   
-  // Efekt przy pierwszym ładowaniu
+  // Effect on first load
   useEffect(() => {
     fetchUsers();
   }, [fetchUsers]);
@@ -3500,12 +3576,298 @@ function UserManagement() {
   );
 }
 
-// Zarządzanie produktami
+// Reports Management Component for Administrator
+function ReportsManagement() {
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [clientsMap, setClientsMap] = useState({});
+  const [salesRepsMap, setSalesRepsMap] = useState({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState({ startDate: '', endDate: '' });
+  const [currentPage, setCurrentPage] = useState(1);
+  const reportsPerPage = 10;
+  
+  // Fetch all reports from the system
+  const fetchAllReports = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      // Get all clients to obtain id->name map
+      const clientsSnapshot = await getDocs(collection(db, "clients"));
+      const clientsData = {};
+      clientsSnapshot.docs.forEach(doc => {
+        clientsData[doc.id] = doc.data().name;
+      });
+      setClientsMap(clientsData);
+      
+      // Get all sales reps to obtain id->name map
+      const salesRepsSnapshot = await getDocs(collection(db, "users"));
+      const salesRepsData = {};
+      salesRepsSnapshot.docs.forEach(doc => {
+        salesRepsData[doc.id] = doc.data().username;
+      });
+      setSalesRepsMap(salesRepsData);
+      
+      // Get all reports, sorted from newest
+      const q = query(
+        collection(db, "reports"),
+        orderBy("date", "desc")
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const reportsData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        clientName: clientsData[doc.data().clientId] || "Nieznany klient",
+        salesRepName: salesRepsData[doc.data().salesRepId] || "Nieznany handlowiec"
+      }));
+      
+      setReports(reportsData);
+    } catch (error) {
+      console.error("Error fetching reports:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+  
+  // Effect on component load
+  useEffect(() => {
+    fetchAllReports();
+  }, [fetchAllReports]);
+  
+  // Function to filter reports
+  const getFilteredReports = useCallback(() => {
+    return reports.filter(report => {
+      // Filter by search text
+      const matchesSearch = searchTerm.trim() === '' || 
+        report.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        report.salesRepName.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Filter by date range
+      let matchesDate = true;
+      if (dateFilter.startDate) {
+        matchesDate = matchesDate && new Date(report.date) >= new Date(dateFilter.startDate);
+      }
+      if (dateFilter.endDate) {
+        matchesDate = matchesDate && new Date(report.date) <= new Date(dateFilter.endDate);
+      }
+      
+      return matchesSearch && matchesDate;
+    });
+  }, [reports, searchTerm, dateFilter]);
+  
+  // Get filtered and sorted reports
+  const filteredReports = getFilteredReports();
+  
+  // Calculate current page reports (pagination)
+  const indexOfLastReport = currentPage * reportsPerPage;
+  const indexOfFirstReport = indexOfLastReport - reportsPerPage;
+  const currentReports = filteredReports.slice(indexOfFirstReport, indexOfLastReport);
+  const totalPages = Math.ceil(filteredReports.length / reportsPerPage);
+  
+  // Change page
+  const paginate = (pageNumber) => setCurrentPage(pageNumber);
+  
+  // Delete report
+  const deleteReport = async (reportId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
+      return;
+    }
+    
+    try {
+      // First, get the report to get photo references
+      const reportDoc = await getDoc(doc(db, "reports", reportId));
+      if (reportDoc.exists()) {
+        const reportData = reportDoc.data();
+        
+        // Delete photos from storage if they exist
+        if (reportData.photos && reportData.photos.length > 0) {
+          for (const photo of reportData.photos) {
+            if (photo.path) {
+              try {
+                const photoRef = ref(storage, photo.path);
+                await deleteObject(photoRef);
+              } catch (photoError) {
+                console.error("Error deleting photo:", photoError);
+                // Continue with deleting other photos
+              }
+            }
+          }
+        }
+      }
+      
+      await deleteDoc(doc(db, "reports", reportId));
+      fetchAllReports(); // Refresh reports list
+    } catch (error) {
+      console.error("Error deleting report:", error);
+      alert("Wystąpił błąd podczas usuwania raportu");
+    }
+  };
+  
+  // Generate PDF report for a specific report
+  const generateReportPDF = async (report) => {
+    try {
+      // First, get the client data
+      const clientDoc = await getDoc(doc(db, "clients", report.clientId));
+      if (!clientDoc.exists()) {
+        alert("Nie można znaleźć danych klienta");
+        return;
+      }
+      
+      const clientData = clientDoc.data();
+      const client = {
+        id: report.clientId,
+        name: clientData.name,
+        address: clientData.address,
+        postalCode: clientData.postalCode,
+        city: clientData.city
+      };
+      
+      // Get sales rep info
+      const salesRep = {
+        username: salesRepsMap[report.salesRepId] || "Unknown"
+      };
+      
+      // Generate company letterhead PDF
+      await generateCompanyReportPDF(client, report, salesRep);
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      alert("Wystąpił problem z generowaniem raportu. Sprawdź czy obrazy są dostępne.");
+    }
+  };
+  
+  return (
+    <div className="tile">
+      <div className="tile-header">
+        <h2 className="tile-title">Zarządzanie Raportami</h2>
+      </div>
+      
+      {/* Filters */}
+      <div className="filters-container mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="block mb-1">Wyszukaj</label>
+          <input
+            type="text"
+            className="input-field w-full"
+            placeholder="Wyszukaj po nazwie klienta lub handlowca..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        
+        <div>
+          <label className="block mb-1">Data od</label>
+          <input
+            type="date"
+            className="input-field w-full"
+            value={dateFilter.startDate}
+            onChange={(e) => setDateFilter({...dateFilter, startDate: e.target.value})}
+          />
+        </div>
+        
+        <div>
+          <label className="block mb-1">Data do</label>
+          <input
+            type="date"
+            className="input-field w-full"
+            value={dateFilter.endDate}
+            onChange={(e) => setDateFilter({...dateFilter, endDate: e.target.value})}
+          />
+        </div>
+      </div>
+      
+      {isLoading ? (
+        <div className="loading-container p-8 text-center">
+          <p>Ładowanie raportów...</p>
+        </div>
+      ) : filteredReports.length === 0 ? (
+        <div className="no-reports p-8 text-center">
+          <p>Brak raportów spełniających kryteria wyszukiwania</p>
+        </div>
+      ) : (
+        <>
+          <div className="reports-list overflow-x-auto">
+            <table className="data-table w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="p-3 border">Nr raportu</th>
+                  <th className="p-3 border">Data</th>
+                  <th className="p-3 border">Klient</th>
+                  <th className="p-3 border">Handlowiec</th>
+                  <th className="p-3 border">Proces</th>
+                  <th className="p-3 border">Cel badań</th>
+                  <th className="p-3 border">Zdjęcia</th>
+                  <th className="p-3 border">Akcje</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentReports.map((report, index) => {
+                  const reportDate = new Date(report.date);
+                  const reportYear = reportDate.getFullYear();
+                  // Calculate report number (index + 1 in current year)
+                  const reportNumber = `${index + 1 + (currentPage - 1) * reportsPerPage}/ANL/${reportYear}`;
+                  
+                  return (
+                    <tr key={report.id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="p-3 border text-center font-semibold">{reportNumber}</td>
+                      <td className="p-3 border">{new Date(report.date).toLocaleDateString('pl-PL')}</td>
+                      <td className="p-3 border">{report.clientName}</td>
+                      <td className="p-3 border">{report.salesRepName}</td>
+                      <td className="p-3 border">{report.processName || '-'}</td>
+                      <td className="p-3 border">{report.researchGoal || 'Kontrola parametrów procesów.'}</td>
+                      <td className="p-3 border text-center">
+                        {report.photos && report.photos.length > 0 ? report.photos.length : '-'}
+                      </td>
+                      <td className="p-3 border">
+                        <div className="flex justify-center space-x-2">
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => generateReportPDF(report)}
+                          >
+                            PDF
+                          </button>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => deleteReport(report.id)}
+                          >
+                            Usuń
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="pagination mt-6 flex justify-center">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNumber => (
+                <button
+                  key={pageNumber}
+                  className={`pagination-item mx-1 px-3 py-1 border ${
+                    currentPage === pageNumber ? 'bg-blue-500 text-white' : 'bg-white'
+                  }`}
+                  onClick={() => paginate(pageNumber)}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Product Management
 function ProductManagement({ fetchProducts, products }) {
   const [newProduct, setNewProduct] = useState({ name: '', consumption: 0 });
   const [editingProduct, setEditingProduct] = useState(null);
   
-  // Dodaj produkt
+  // Add product
   const addProduct = async () => {
     if (newProduct.name && newProduct.consumption > 0) {
       try {
@@ -3515,17 +3877,17 @@ function ProductManagement({ fetchProducts, products }) {
           createdAt: new Date().toISOString()
         });
         
-        // Odśwież produkty
+        // Refresh products
         fetchProducts();
         setNewProduct({ name: '', consumption: 0 });
       } catch (error) {
-        console.error("Błąd podczas dodawania produktu:", error);
+        console.error("Error adding product:", error);
         alert("Wystąpił błąd podczas dodawania produktu");
       }
     }
   };
   
-  // Aktualizuj produkt
+  // Update product
   const updateProduct = async () => {
     if (editingProduct && editingProduct.name && editingProduct.consumption > 0) {
       try {
@@ -3536,17 +3898,17 @@ function ProductManagement({ fetchProducts, products }) {
           updatedAt: new Date().toISOString()
         });
         
-        // Odśwież produkty
+        // Refresh products
         fetchProducts();
         setEditingProduct(null);
       } catch (error) {
-        console.error("Błąd podczas aktualizacji produktu:", error);
+        console.error("Error updating product:", error);
         alert("Wystąpił błąd podczas aktualizacji produktu");
       }
     }
   };
   
-  // Usuń produkt
+  // Delete product
   const deleteProduct = async (id) => {
     if (!window.confirm("Czy na pewno chcesz usunąć ten produkt?")) {
       return;
@@ -3555,10 +3917,10 @@ function ProductManagement({ fetchProducts, products }) {
     try {
       await deleteDoc(doc(db, "products", id));
       
-      // Odśwież produkty
+      // Refresh products
       fetchProducts();
     } catch (error) {
-      console.error("Błąd podczas usuwania produktu:", error);
+      console.error("Error deleting product:", error);
       alert("Wystąpił błąd podczas usuwania produktu");
     }
   };
@@ -3686,7 +4048,7 @@ function ProductManagement({ fetchProducts, products }) {
   );
 }
 
-// Zarządzanie wszystkimi klientami (Admin)
+// Client Management (Admin)
 function ClientManagement() {
   const [clients, setClients] = useState([]);
   const [selectedClient, setSelectedClient] = useState(null);
@@ -3697,7 +4059,7 @@ function ClientManagement() {
   const [showEditClientModal, setShowEditClientModal] = useState(false);
   const [editClientData, setEditClientData] = useState(null);
   
-  // Pobierz wszystkich klientów
+  // Fetch all clients
   const fetchAllClients = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "clients"));
@@ -3708,12 +4070,12 @@ function ClientManagement() {
       
       setClients(clientsData);
     } catch (error) {
-      console.error("Błąd podczas pobierania klientów:", error);
+      console.error("Error fetching clients:", error);
       setClients([]);
     }
   }, []);
   
-  // Pobierz handlowców
+  // Fetch sales reps
   const fetchSalesReps = useCallback(async () => {
     try {
       const q = query(collection(db, "users"), where("role", "==", "salesRep"));
@@ -3725,12 +4087,12 @@ function ClientManagement() {
       
       setSalesReps(salesRepsData);
     } catch (error) {
-      console.error("Błąd podczas pobierania handlowców:", error);
+      console.error("Error fetching sales reps:", error);
       setSalesReps([]);
     }
   }, []);
   
-  // Pobierz raporty dla wybranego klienta
+  // Fetch reports for selected client
   const fetchClientReports = useCallback(async (clientId) => {
     try {
       const q = query(collection(db, "reports"), where("clientId", "==", clientId));
@@ -3740,17 +4102,17 @@ function ClientManagement() {
         ...doc.data()
       }));
       
-      // Sortuj raporty od najnowszego
+      // Sort reports from newest
       reportsData.sort((a, b) => new Date(b.date) - new Date(a.date));
       
       setReports(reportsData);
     } catch (error) {
-      console.error("Błąd podczas pobierania raportów:", error);
+      console.error("Error fetching reports:", error);
       setReports([]);
     }
   }, []);
 
-  // Pobierz notatki dla wybranego klienta
+  // Fetch notes for selected client
   const fetchClientNotes = useCallback(async (clientId) => {
     try {
       const q = query(
@@ -3760,17 +4122,13 @@ function ClientManagement() {
       );
       
       const querySnapshot = await getDocs(q);
-      const notesData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
       
     } catch (error) {
-      console.error("Błąd podczas pobierania notatek:", error);
+      console.error("Error fetching notes:", error);
     }
   }, []);
   
-  // Przypisz klienta do handlowca
+  // Assign client to sales rep
   const assignClientToSalesRep = async (clientId, salesRepId) => {
     try {
       const clientRef = doc(db, "clients", clientId);
@@ -3779,15 +4137,15 @@ function ClientManagement() {
         updatedAt: new Date().toISOString()
       });
       
-      // Odśwież listę klientów
+      // Refresh clients list
       fetchAllClients();
     } catch (error) {
-      console.error("Błąd podczas przypisywania klienta:", error);
+      console.error("Error assigning client:", error);
       alert("Wystąpił błąd podczas przypisywania klienta");
     }
   };
   
-  // Edytuj dane klienta
+  // Edit client data
   const editClient = async () => {
     if (!editClientData || editClientData.name.trim() === '') return;
     
@@ -3804,7 +4162,7 @@ function ClientManagement() {
         updatedAt: new Date().toISOString()
       });
       
-      // Odśwież dane klienta
+      // Refresh client data
       fetchAllClients();
       if (selectedClient && selectedClient.id === editClientData.id) {
         setSelectedClient({
@@ -3816,59 +4174,69 @@ function ClientManagement() {
       setShowEditClientModal(false);
       setEditClientData(null);
     } catch (error) {
-      console.error("Błąd podczas edycji klienta:", error);
+      console.error("Error editing client:", error);
     }
   };
   
-  // Usuń klienta
+  // Delete client
   const deleteClient = async (clientId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć tego klienta? Ta operacja jest nieodwracalna.")) {
       return;
     }
     
     try {
-      // Usuń klienta
+      // Delete client
       await deleteDoc(doc(db, "clients", clientId));
       
-      // Odśwież listę klientów
+      // Refresh clients list
       fetchAllClients();
       
-      // Jeśli usunięty klient był wybrany, zresetuj wybór
+      // If the deleted client was selected, reset selection
       if (selectedClient && selectedClient.id === clientId) {
         setSelectedClient(null);
         setReports([]);
       }
     } catch (error) {
-      console.error("Błąd podczas usuwania klienta:", error);
+      console.error("Error deleting client:", error);
       alert("Wystąpił błąd podczas usuwania klienta");
     }
   };
 
-  // Generuj raport PDF na firmowym papierze dla wybranego raportu
+  // Generate company letterhead PDF report for selected report
   const generateCompanyPDF = async (report) => {
     if (!selectedClient) return;
     
     const salesRep = salesReps.find(rep => rep.id === report.salesRepId);
     const salesRepName = salesRep ? salesRep.username : "Nieznany";
     
-    await generateCompanyReportPDF(selectedClient, report, {
-      username: salesRepName
-    });
+    try {
+      await generateCompanyReportPDF(selectedClient, report, {
+        username: salesRepName
+      });
+    } catch (error) {
+      console.error("Error generating company PDF:", error);
+      alert("Wystąpił problem z generowaniem raportu. Sprawdź czy obrazy są dostępne.");
+    }
   };
   
-  // Generuj standardowy raport PDF dla wybranego raportu
+  // Generate standard PDF report for selected report
   const generateSinglePDF = async (report) => {
     if (!selectedClient) return;
-    await generateSingleReportPDF(selectedClient, report);
+    try {
+      await generateSingleReportPDF(selectedClient, report);
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      alert("Wystąpił problem z generowaniem raportu. Sprawdź czy obrazy są dostępne.");
+    }
   };
   
-  // Efekt przy pierwszym ładowaniu
+  // Effect on first load
   useEffect(() => {
     fetchAllClients();
     fetchSalesReps();
   }, [fetchAllClients, fetchSalesReps]);
   
-  // Efekt przy zmianie wybranego klienta
+  // Effect when selected client changes
   useEffect(() => {
     if (selectedClient) {
       fetchClientReports(selectedClient.id);
@@ -3876,34 +4244,55 @@ function ClientManagement() {
     }
   }, [selectedClient, fetchClientReports, fetchClientNotes]);
   
-  // Filtrowanie klientów na podstawie wyszukiwania
+  // Filter clients based on search
   const filteredClients = searchTerm.trim() === ''
     ? clients
     : clients.filter(client => 
         client.name.toLowerCase().includes(searchTerm.toLowerCase())
       );
   
-  // Pobierz nazwę handlowca na podstawie ID
+  // Get sales rep name based on ID
   const getSalesRepName = (salesRepId) => {
     const salesRep = salesReps.find(rep => rep.id === salesRepId);
     return salesRep ? salesRep.username : 'Nieprzypisany';
   };
   
-  // Usuń raport
+  // Delete report
   const deleteReport = async (reportId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć ten raport? Ta operacja jest nieodwracalna.")) {
       return;
     }
     
     try {
+      // First get the report to access photo references
+      const reportDoc = await getDoc(doc(db, "reports", reportId));
+      if (reportDoc.exists()) {
+        const reportData = reportDoc.data();
+        
+        // Delete photos from storage if they exist
+        if (reportData.photos && reportData.photos.length > 0) {
+          for (const photo of reportData.photos) {
+            if (photo.path) {
+              try {
+                const photoRef = ref(storage, photo.path);
+                await deleteObject(photoRef);
+              } catch (photoError) {
+                console.error("Error deleting photo:", photoError);
+                // Continue deleting other photos
+              }
+            }
+          }
+        }
+      }
+      
       await deleteDoc(doc(db, "reports", reportId));
       
-      // Odśwież listę raportów
+      // Refresh reports list
       if (selectedClient) {
         fetchClientReports(selectedClient.id);
       }
     } catch (error) {
-      console.error("Błąd podczas usuwania raportu:", error);
+      console.error("Error deleting report:", error);
       alert("Wystąpił błąd podczas usuwania raportu");
     }
   };
@@ -4036,7 +4425,7 @@ function ClientManagement() {
                           <div className="report-header mb-3 flex justify-between items-center">
                             <h5 className="font-semibold">Raport z dnia {new Date(report.date).toLocaleDateString()}</h5>
                             
-                            {/* Przyciski do generowania PDF i usuwania raportu */}
+                            {/* Buttons for generating PDF and deleting report */}
                             <div className="flex space-x-2">
                               <button
                                 className="btn btn-secondary btn-sm"
@@ -4094,6 +4483,27 @@ function ClientManagement() {
                             </table>
                           </div>
                           
+                          {/* Display photos if present */}
+                          {report.photos && report.photos.length > 0 && (
+                            <div className="mt-3">
+                              <strong>Zdjęcia:</strong>
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                {report.photos.map((photo, idx) => (
+                                  <div key={idx} className="photo-preview">
+                                    <img 
+                                      src={photo.url} 
+                                      alt={`Zdjęcie ${idx + 1}`} 
+                                      className="w-full h-40 object-contain border rounded"
+                                    />
+                                    {photo.description && (
+                                      <p className="text-sm mt-1 text-gray-600">{photo.description}</p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
                           {report.summary && (
                             <div className="mt-3">
                               <strong>Podsumowanie:</strong>
@@ -4122,7 +4532,7 @@ function ClientManagement() {
         </div>
       </div>
       
-      {/* Modal edycji klienta */}
+      {/* Modal for editing client */}
       {showEditClientModal && editClientData && (
         <div className="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="modal-content bg-white p-6 rounded-lg shadow-lg w-96">
@@ -4230,7 +4640,7 @@ function ClientManagement() {
   ); 
 }
 
-// Panel administratora
+// Admin Panel
 function AdminPanel({ fetchProducts, products }) {
   const [activeSection, setActiveSection] = useState('users');
   
@@ -4277,7 +4687,7 @@ function AdminPanel({ fetchProducts, products }) {
   );
 }
 
-// Główny komponent aplikacji
+// Main application component
 function App() {
   const [activeTab, setActiveTab] = useState('chemicalConsumption');
   const [currentUser, setCurrentUser] = useState(null);
@@ -4290,13 +4700,21 @@ function App() {
     { id: "5", name: "eska®phos 3045", consumption: 190 }
   ]);
 
-  // Funkcja inicjalizująca dane w Firebase
+  // Function to initialize Firebase data
   const initializeFirebaseData = async () => {
     try {
+      // Check if letterhead exists in storage, if not, upload it
+      try {
+        await getLetterheadUrl();
+      } catch (error) {
+        console.log("Letterhead not found, initializing...");
+        // Here you would upload the letterhead to Firebase Storage
+      }
+      
       const usersSnapshot = await getDocs(collection(db, "users"));
       
       if (usersSnapshot.empty) {
-        console.log("Inicjalizacja bazy danych z użytkownikami...");
+        console.log("Initializing database with users...");
         
         const predefinedUsers = [
           { username: "Admin", email: "admin@haug.com", password: "admin123", role: "admin" },
@@ -4318,23 +4736,23 @@ function App() {
               createdAt: new Date().toISOString()
             });
             
-            console.log(`Użytkownik ${user.username} dodany pomyślnie`);
+            console.log(`User ${user.username} added successfully`);
           } catch (error) {
             if (error.code === 'auth/email-already-in-use') {
-              console.log(`Użytkownik ${user.email} już istnieje`);
+              console.log(`User ${user.email} already exists`);
             } else {
-              console.error(`Błąd dodawania użytkownika ${user.username}:`, error);
+              console.error(`Error adding user ${user.username}:`, error);
             }
           }
         }
       } else {
-        console.log("Użytkownicy już istnieją w bazie danych");
+        console.log("Users already exist in database");
       }
       
       const productsSnapshot = await getDocs(collection(db, "products"));
       
       if (productsSnapshot.empty) {
-        console.log("Inicjalizacja bazy danych z produktami...");
+        console.log("Initializing database with products...");
         
         const initialProducts = [
           { name: "eska®clean 1001", consumption: 180 },
@@ -4351,16 +4769,16 @@ function App() {
           });
         }
         
-        console.log("Produkty dodane pomyślnie");
+        console.log("Products added successfully");
       } else {
-        console.log("Produkty już istnieją w bazie danych");
+        console.log("Products already exist in database");
       }
     } catch (error) {
-      console.error("Błąd inicjalizacji bazy danych:", error);
+      console.error("Error initializing database:", error);
     }
   };
   
-  // Funkcja wylogowania
+  // Logout function
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -4368,11 +4786,11 @@ function App() {
       localStorage.removeItem('currentUser');
       setActiveTab('chemicalConsumption');
     } catch (error) {
-      console.error('Błąd wylogowania:', error);
+      console.error('Logout error:', error);
     }
   };
   
-  // Pobierz produkty z Firestore
+  // Fetch products from Firestore
   const fetchProducts = useCallback(async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "products"));
@@ -4385,11 +4803,11 @@ function App() {
         setProducts(productsData);
       }
     } catch (error) {
-      console.error("Błąd podczas pobierania produktów:", error);
+      console.error("Error fetching products:", error);
     }
   }, []);
 
-  // Effect do inicjalizacji danych i obsługi autoryzacji
+  // Effect for data initialization and auth handling
   useEffect(() => {
     setIsAuthLoading(true);
     
@@ -4422,7 +4840,7 @@ function App() {
             }
           }
         } catch (error) {
-          console.error('Błąd pobierania danych użytkownika:', error);
+          console.error('Error fetching user data:', error);
         }
       } else {
         setCurrentUser(null);
@@ -4438,7 +4856,7 @@ function App() {
     return () => unsubscribe();
   }, [fetchProducts]);
 
-  // Renderowanie podczas ładowania
+  // Render during loading
   if (isAuthLoading) {
     return (
       <div className="loading-container">
@@ -4448,12 +4866,12 @@ function App() {
     );
   }
 
-  // Jeśli użytkownik nie jest zalogowany, pokaż ekran logowania
+  // If user is not logged in, show login screen
   if (!currentUser) {
     return <LoginScreen />;
   }
 
-  // Renderowanie głównego interfejsu dla zalogowanego użytkownika
+  // Render main interface for logged-in user
   return (
     <div className="app-container">
       <div className="header">
